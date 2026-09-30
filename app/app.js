@@ -1055,6 +1055,8 @@ window.addEventListener('hashchange', () => { navCount++; render(); });
 /* ---------- 시작 ---------- */
 render();
 setTimeout(() => $('#splash').classList.add('hide'), 1200);
+// 휴대폰 저장공간이 부족해도 브라우저가 데이터를 지우지 않도록 요청
+navigator.storage?.persist?.().catch(() => {});
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
