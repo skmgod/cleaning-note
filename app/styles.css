@@ -365,7 +365,7 @@ body:not(.detail) .action-bar { display: none; }
   position: fixed; left: 50%; bottom: calc(var(--tab-h) + 28px + var(--safe-b)); z-index: 120;
   transform: translate(-50%, 16px); opacity: 0; pointer-events: none;
   padding: 12px 18px; border-radius: 999px; background: rgba(28, 28, 28, .92); color: #fff;
-  font-size: 14px; font-weight: 700; white-space: nowrap; transition: .25s;
+  font-size: 14px; font-weight: 700; width: max-content; max-width: calc(100vw - 32px); text-align: center; line-height: 1.45; transition: .25s;
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 body.detail #toast { bottom: calc(96px + var(--safe-b)); }
@@ -428,3 +428,10 @@ body.detail #tabbar { display: none; }
 .type-add input { flex: 1; min-width: 0; padding: 10px 14px; border: 1.5px solid var(--line); border-radius: 999px; background: #fff; font-size: 15px; outline: none; }
 .type-add input:focus { border-color: var(--yellow); }
 .type-add .chip-btn { padding: 0 16px; }
+
+/* ---------- AI 붙여넣기 ---------- */
+.ai-paste { margin: 0 0 16px; padding: 12px 14px; background: var(--yellow-soft); border-radius: 16px; }
+.ai-paste summary { font-weight: 800; color: var(--brown); cursor: pointer; }
+.ai-paste textarea { width: 100%; margin-top: 10px; padding: 12px 14px; border: 1.5px solid #ECECEC; border-radius: 14px; background: #fff; font: inherit; font-size: 16px; resize: none; outline: none; }
+.ai-paste textarea:focus { border-color: var(--yellow); }
+.ai-paste-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 12.5px; color: var(--brown-2); font-weight: 700; }

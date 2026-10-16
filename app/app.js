@@ -88,6 +88,144 @@ function fmtDur(min) {
 const clock = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`; };
 const hm = ts => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
+/* ---------- AI 답 · 말한 내용 → 예약 칸 채우기 ---------- */
+// AI가 준 문장(또는 🎤로 말한 문장)에서 건물명·호수·비번·날짜·시간·금액·종류를 찾아 채웁니다.
+// 완벽하지 않으니 채운 뒤 꼭 확인하고 등록하세요.
+const AI_PASTE_HTML = `
+  <details class="ai-paste" open>
+    <summary>🤖 AI 답 · 말한 내용 붙여넣기</summary>
+    <textarea id="ai-text" rows="4" placeholder="예: 다음주 화요일 오후 2시 래미안 아파트 101동 1203호 입주청소 15만원 비번 1234"></textarea>
+    <div class="ai-paste-foot"><span>🎤 키보드 마이크로 말해도 돼요</span><button type="button" class="chip-btn on" data-action="paste-fill">채우기</button></div>
+  </details>`;
+const RAW_LABELS = [
+  [/^(건물명?|장소|아파트|빌딩)$/, 'building'],
+  [/^(호|호수|동호수|호실)$/, 'unit'],
+  [/^(비번|비밀번호|암호|도어락|pw)$/i, 'doorPw'],
+  [/^(날짜|일자|일정)$/, 'date'],
+  [/^(시간|시각)$/, 'time'],
+  [/^(금액|가격|요금|비용)$/, 'price'],
+  [/^(종류|청소종류|유형)$/, 'type'],
+  [/^(메모|비고|특이사항|특이)$/, 'memo'],
+];
+const PLACE_END = /(아파트|빌딩|타워|오피스텔|맨션|빌라|오피스|상가|센터|파크|캐슬|자이|푸르지오|힐스테이트|단지)$/;
+const plusDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+
+// 문장 → { building, unit, doorPw, date, time, price, type, memo } (찾은 것만 담김)
+function parseReservation(text, types = db.types, now = new Date()) {
+  const raw = {};
+  const free = [];
+  for (const line of String(text || '').split(/\n+/)) {
+    const m = line.match(/^\s*[-*•]?\s*([가-힣a-zA-Z]{1,6})\s*[:：]\s*(.+?)\s*$/);
+    const hit = m && RAW_LABELS.find(([re]) => re.test(m[1]));
+    if (hit) raw[hit[1]] = m[2];
+    else free.push(line);
+  }
+  const s = free.join(' ');
+  const out = {
+    building: (raw.building || '').trim() || findBuilding(s),
+    unit: extractUnit(raw.unit || s) || (raw.unit || '').trim(),
+    doorPw: raw.doorPw ? raw.doorPw.replace(/\s/g, '') : extractPw(s),
+    date: parseDate(raw.date || s, now),
+    time: parseTime(raw.time || s),
+    price: parsePrice(raw.price || s),
+    type: matchType(raw.type || s, types),
+    memo: (raw.memo || '').trim(),
+  };
+  return Object.fromEntries(Object.entries(out).filter(([, v]) => v));
+}
+
+function findBuilding(s) {
+  const words = s.split(/\s+/).map(w => w.replace(/[,.!?]+$/, ''));
+  const i = words.findIndex(w => PLACE_END.test(w));
+  if (i < 0) return '';
+  const prev = words[i - 1];
+  const usePrev = prev && /^[가-힣A-Za-z·]+$/.test(prev) && !/(요일|주|시|분|원|오전|오후|다음|이번|오늘|내일|모레|예약|등록)$/.test(prev);
+  return (usePrev ? prev + ' ' : '') + words[i];
+}
+function extractUnit(s) {
+  const m = s.match(/(\d{1,4}\s*동\s*)?\d{1,4}\s*호/);
+  return m ? m[0].replace(/\s*동\s*/, '동 ').replace(/\s+호/, '호').trim() : '';
+}
+function extractPw(s) {
+  const m = s.match(/(?:비밀번호|비번|암호|도어락|pw)\s*[:은는이가]?\s*([0-9*#]{3,})/i);
+  return m ? m[1] : '';
+}
+function parseDate(s, now) {
+  if (!s) return '';
+  const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let m = s.match(/(\d{4})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})/);
+  if (m) return ymd(new Date(+m[1], +m[2] - 1, +m[3]));
+  if (/오늘/.test(s)) return ymd(base);
+  if (/내일/.test(s)) return ymd(plusDays(base, 1));
+  if (/모레/.test(s)) return ymd(plusDays(base, 2));
+  m = s.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/) || s.match(/(\d{1,2})\/(\d{1,2})(?!\d)/);
+  if (m) {
+    const d = new Date(base.getFullYear(), +m[1] - 1, +m[2]);
+    if (d < base) d.setFullYear(d.getFullYear() + 1);
+    return ymd(d);
+  }
+  m = s.match(/([일월화수목금토])\s*요일/);
+  if (m) {
+    const target = WD.indexOf(m[1]);
+    const monday = plusDays(base, -((base.getDay() + 6) % 7));
+    if (/다음\s*주/.test(s)) return ymd(plusDays(monday, ((target + 6) % 7) + 7));
+    if (/이번\s*주/.test(s)) return ymd(plusDays(monday, (target + 6) % 7));
+    return ymd(plusDays(base, (target - base.getDay() + 7) % 7));
+  }
+  m = s.match(/(\d{1,2})\s*일/);
+  if (m) {
+    const d = new Date(base.getFullYear(), base.getMonth(), +m[1]);
+    if (d < base) d.setMonth(d.getMonth() + 1);
+    return ymd(d);
+  }
+  return '';
+}
+function parseTime(s) {
+  if (!s) return '';
+  let m = s.match(/(\d{1,2}):(\d{2})/);
+  if (m && +m[1] < 24) return `${pad(+m[1])}:${m[2]}`;
+  m = s.match(/(오전|오후|아침|저녁|밤)?\s*(\d{1,2})\s*시(?!간)(?:\s*(\d{1,2})\s*분)?(\s*반)?/);
+  if (!m) return '';
+  let h = +m[2];
+  const min = m[4] ? 30 : (m[3] ? +m[3] : 0);
+  if (['오후', '저녁', '밤'].includes(m[1])) { if (h < 12) h += 12; }
+  else if (['오전', '아침'].includes(m[1])) { if (h === 12) h = 0; }
+  else if (h >= 1 && h <= 6) h += 12; // 오전/오후 말이 없으면 1~6시는 오후로 봄
+  if (h > 23) return '';
+  return `${pad(h)}:${pad(min)}`;
+}
+function parsePrice(s) {
+  if (!s) return 0;
+  let m = s.match(/(\d+(?:\.\d+)?)\s*만/);
+  if (m) return Math.round(parseFloat(m[1]) * 10000);
+  m = s.match(/(\d{1,3}(?:,\d{3})+|\d{4,})\s*원/);
+  return m ? +m[1].replace(/,/g, '') : 0;
+}
+function matchType(s, types) {
+  let best = '';
+  for (const t of types) {
+    const key = t.replace(/청소$/, '');
+    if ((s.includes(t) || (key.length >= 2 && s.includes(key))) && t.length > best.length) best = t;
+  }
+  return best;
+}
+// 찾은 값을 예약 칸에 넣기 (저장은 사용자가 확인 후 직접)
+function applyParsed(form, p) {
+  const filled = [];
+  if (p.building) { form.building.value = p.building; form.building.dispatchEvent(new Event('change')); filled.push('건물명'); }
+  if (p.unit) { form.unit.value = p.unit; filled.push('호수'); }
+  if (p.doorPw) { form.doorPw.value = p.doorPw; filled.push('비밀번호'); }
+  if (p.date) { form.date.value = p.date; filled.push('날짜'); }
+  if (p.time) { form.time.value = p.time; filled.push('시간'); }
+  if (p.price) { form.price.value = p.price.toLocaleString('ko-KR'); filled.push('금액'); }
+  if (p.type) {
+    const r = [...form.querySelectorAll('input[name=type]')].find(x => x.value === p.type);
+    if (r) { r.checked = true; $('.type-chips', form).dataset.sel = p.type; filled.push('종류'); }
+  }
+  if (p.memo) { form.memo.value = p.memo; filled.push('메모'); }
+  toast(filled.length ? `${filled.join(' · ')} 채웠어요. 확인 후 등록하세요` : '채울 내용을 찾지 못했어요');
+}
+
 const cust = id => db.customers.find(c => c.id === id);
 const findJob = id => db.jobs.find(j => j.id === id);
 function typeOf(t) {
@@ -621,6 +759,7 @@ function openJobForm(job = null, preset = {}) {
   openSheet(`
   <form class="form" id="job-form" autocomplete="off">
     <h2>${isNew ? '청소 예약 등록' : '예약 수정'}</h2>
+    ${isNew ? AI_PASTE_HTML : ''}
     <div class="place">
       <p class="f-label">🏢 청소 장소</p>
       <label class="f">건물명<input name="building" placeholder="예: 래미안 아파트 / 한빛빌딩" value="${esc(j.building)}"></label>
@@ -869,6 +1008,10 @@ const actions = {
     save();
     toast('삭제했어요');
     if (currentPage()[0] === 'job') goBack(); else refresh();
+  },
+  'paste-fill'(el) {
+    const form = el.closest('form');
+    applyParsed(form, parseReservation($('#ai-text', form).value));
   },
   'toggle-pw'(el) { el.classList.toggle('on'); },
   'edit-types'(el) {
