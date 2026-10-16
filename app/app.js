@@ -1244,8 +1244,21 @@ document.addEventListener('input', e => {
 window.addEventListener('hashchange', () => { navCount++; render(); });
 
 /* ---------- 시작 ---------- */
+// 앱을 열거나 다시 보일 때 AI 보관함의 새 예약을 자동으로 가져오기 (주소를 저장한 경우만)
+let autoPulling = false;
+async function autoPull() {
+  if (autoPulling || !syncUrl().trim()) return;
+  autoPulling = true;
+  try {
+    const n = await pullFromServer();
+    if (n) { toast(`AI가 넣은 예약 ${n}건을 가져왔어요`); refresh(); }
+  } catch { /* 인터넷이 없을 때는 조용히 넘어가요. 설정의 “예약 가져오기”로 다시 할 수 있어요 */ }
+  finally { autoPulling = false; }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') autoPull(); });
 render();
 setTimeout(() => $('#splash').classList.add('hide'), 1200);
+autoPull();
 // 휴대폰 저장공간이 부족해도 브라우저가 데이터를 지우지 않도록 요청
 navigator.storage?.persist?.().catch(() => {});
 if ('serviceWorker' in navigator) {
