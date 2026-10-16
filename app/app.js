@@ -21,9 +21,9 @@ let db = load();
 function load() {
   try {
     const d = JSON.parse(localStorage.getItem(KEY));
-    if (d && Array.isArray(d.jobs)) { d.types ||= [...DEFAULT_TYPES]; d.repairs ||= []; d.repairPhotos ||= []; return d; }
+    if (d && Array.isArray(d.jobs)) { d.types ||= [...DEFAULT_TYPES]; d.repairs ||= []; d.repairPhotos ||= []; d.complaints ||= []; return d; }
   } catch (e) { /* 손상된 데이터면 새로 시작 */ }
-  return { customers: [], jobs: [], types: [...DEFAULT_TYPES], repairs: [], repairPhotos: [] };
+  return { customers: [], jobs: [], types: [...DEFAULT_TYPES], repairs: [], repairPhotos: [], complaints: [] };
 }
 function save() { localStorage.setItem(KEY, JSON.stringify(db)); }
 
@@ -274,12 +274,13 @@ const currentPage = () => location.hash.replace(/^#\/?/, '').split('/');
 function render(keepScroll = false) {
   const y = window.scrollY;
   const [page = 'home', id] = currentPage();
-  const pages = { home, schedule, customers, housing: housingPage, stats, settings, job: jobPage, customer: customerPage };
+  const pages = { home, schedule, customers, housing: housingPage, complaints: complaintsPage, billing: billingPage, stats, settings, job: jobPage, customer: customerPage };
   const fn = pages[page] || home;
-  document.body.classList.toggle('detail', ['job', 'customer', 'settings'].includes(page));
+  document.body.classList.toggle('detail', ['job', 'customer', 'settings', 'complaints', 'billing'].includes(page));
   app.innerHTML = fn(id);
   document.querySelectorAll('#tabbar [data-tab]').forEach(t => t.classList.toggle('on', t.dataset.tab === (pages[page] ? page : 'home')));
   hydratePhotos();
+  document.querySelector('[data-autofocus]')?.focus();
   tickTimer();
   window.scrollTo(0, keepScroll ? y : 0);
 }
@@ -937,7 +938,7 @@ const HOUSING_TEMPLATES = {
   '수리비 청구': ({ place, amount }) => `안녕하세요. ${place} 수리비 ${amount || '○○원'}을 청구드립니다. 입금 확인 후 연락 부탁드립니다.`,
   '직접 입력': () => '',
 };
-const housingBuildings = () => [...new Set([...db.jobs, ...db.repairs].map(x => (x.building || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+const housingBuildings = () => [...new Set([...db.jobs, ...db.repairs, ...db.complaints].map(x => (x.building || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
 const repairAmount = arr => arr.reduce((a, r) => a + (r.amount || 0), 0);
 const housingDatalist = () => `<datalist id="hs-buildings">${housingBuildings().map(b => `<option value="${esc(b)}">`).join('')}</datalist>`;
 
@@ -964,7 +965,9 @@ function housingSearch(q) {
   const custs = db.customers.filter(c => hit(c.name, c.phone, c.address));
   const jobs = db.jobs.filter(j => hit(j.building, j.unit, j.memo, cust(j.customerId)?.name)).sort(byDateTime);
   const reps = db.repairs.filter(r => hit(r.building, r.unit, r.item, r.memo));
+  const cps = db.complaints.filter(c => hit(c.building, c.unit, c.phone, c.content));
   const rows = [
+    ...cps.map(c => `<button class="hs-row" data-action="hs-open" data-go="complaints"><b>${esc(placeOf(c) || '장소 미정')}</b><small>민원 · ${esc(String(c.content).slice(0, 30))}</small></button>`),
     ...custs.map(c => `<button class="hs-row" data-action="hs-open" data-go="customer/${c.id}"><b>${esc(c.name)}</b><small>고객 · ${esc(c.phone || c.address || '')}</small></button>`),
     ...jobs.map(j => `<button class="hs-row" data-action="hs-open" data-go="job/${j.id}"><b>${esc(jobTitle(j))}</b><small>예약 · ${dateLabel(j.date)} ${j.time}</small></button>`),
     ...reps.map(r => `<button class="hs-row" data-action="hs-toggle-paid" data-id="${r.id}"><b>${esc(placeOf(r) || '장소 미정')}</b><small>수리 · ${esc(r.item || '')} · ${won(r.amount)}</small></button>`),
@@ -989,9 +992,10 @@ function housingPage() {
     </div>
   </section>
 
+  <button class="hs-complaint" data-action="hs-complaints"><span>🛠️</span><div><b>민원처리</b><small>고장 신고 접수 → 처리 완료 → 청구내역</small></div><svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
   <section class="hs-grid">
     <button class="hs-btn" data-action="hs-search"><span class="hs-ico" style="background:#DDF3FF">🔍</span><b>검색</b><small>건물 · 호수 · 고객</small></button>
-    <button class="hs-btn" data-action="hs-repair"><span class="hs-ico" style="background:#FFE6D6">🧾</span><b>수리비 청구</b><small>금액 기록 · 청구</small></button>
+    <button class="hs-btn" data-action="hs-billing"><span class="hs-ico" style="background:#FFE6D6">🧾</span><b>청구내역</b><small>금액 입력 · 수정 · 삭제</small></button>
     <button class="hs-btn" data-action="hs-photo"><span class="hs-ico" style="background:#DDF5EA">📷</span><b>수리 사진</b><small>전 · 후 사진 보관</small></button>
     <button class="hs-btn" data-action="hs-sms"><span class="hs-ico" style="background:#EDE4FF">💬</span><b>문자</b><small>안내 · 청구 문자</small></button>
   </section>
@@ -1146,6 +1150,180 @@ function openHousingSms() {
   });
 }
 
+
+/* ---------- 민원처리 → 청구내역 ---------- */
+// 고장 신고(민원)를 접수하고, 처리 완료하면 청구내역으로 넘어가 금액을 바로 넣습니다.
+function complaintForm(c = null) {
+  const isNew = !c;
+  openSheet(`
+  <form class="form" id="cp-form" autocomplete="off">
+    <h2>${isNew ? '민원 접수' : '민원 수정'}</h2>
+    ${housingDatalist()}
+    <label class="f">건물이름<input name="building" list="hs-buildings" placeholder="예: 래미안 아파트" value="${esc(c?.building)}"></label>
+    <div class="f-row">
+      <label class="f">호수<input name="unit" placeholder="예: 101동 1203호" value="${esc(c?.unit)}"></label>
+      <label class="f">전화번호<input name="phone" type="tel" inputmode="tel" placeholder="010-0000-0000" value="${esc(c?.phone)}"></label>
+    </div>
+    <label class="f">고장 신고 내용
+      <textarea name="content" rows="5" placeholder="예: 화장실 변기 물이 안 내려감. 오후 3시 이후 방문 요청">${esc(c?.content)}</textarea>
+    </label>
+    <p class="cp-note">시간이나 요청 사항도 여기에 자유롭게 적어 주세요.</p>
+    <button class="btn dark big" type="submit">${isNew ? '민원 접수' : '저장하기'}</button>
+  </form>`, sheet => {
+    const form = $('#cp-form', sheet);
+    // 같은 건물의 지난 기록에서 호수·전화번호를 채워줌 (비어 있을 때만)
+    form.building.addEventListener('change', () => {
+      const b = form.building.value.trim();
+      const same = [...db.complaints, ...db.repairs].filter(x => x.building === b);
+      if (!form.phone.value) { const p = same.filter(x => x.phone).pop(); if (p) form.phone.value = p.phone; }
+      if (!form.unit.value) { const u = same.filter(x => x.unit).pop(); if (u) form.unit.value = u.unit; }
+    });
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = new FormData(form);
+      const data = {
+        building: f.get('building').trim(), unit: f.get('unit').trim(),
+        phone: f.get('phone').trim(), content: f.get('content').trim(),
+      };
+      if (!data.building) { toast('건물이름을 입력해 주세요'); form.building.focus(); return; }
+      if (!data.content) { toast('고장 신고 내용을 적어 주세요'); form.content.focus(); return; }
+      if (c) Object.assign(c, data);
+      else db.complaints.push({ id: uid(), ...data, date: today(), status: 'open', billingId: null, createdAt: Date.now() });
+      save();
+      await closeSheet();
+      toast(isNew ? '민원을 접수했어요' : '저장했어요');
+      refresh();
+    });
+  });
+}
+
+function complaintCard(c) {
+  const isDone = c.status === 'done';
+  return `
+  <article class="cp-card ${isDone ? 'is-done' : ''}">
+    <div class="cp-top">
+      <span class="cp-tag ${isDone ? 'done' : ''}">${isDone ? '처리 완료' : '접수'}</span>
+      <span class="cp-date">${dateLabel(c.date)}</span>
+    </div>
+    <b class="cp-place">${esc(placeOf(c) || '장소 미정')}</b>
+    ${c.phone ? `<a class="cp-phone" href="${telHref(c.phone)}">📞 ${esc(c.phone)}</a>` : '<span class="cp-phone muted">전화번호 없음</span>'}
+    <p class="cp-content">${esc(c.content)}</p>
+    <div class="cp-btns">
+      ${isDone
+        ? (c.billingId
+          ? `<button class="hs-mini" data-action="bill-open">청구내역 보기</button>`
+          : `<span class="cp-phone muted">청구 내역이 삭제됐어요</span>`)
+        : `<button class="hs-mini" data-action="cp-done" data-id="${c.id}">처리 완료 → 청구</button>`}
+      <button class="hs-mini ghost" data-action="cp-edit" data-id="${c.id}">수정</button>
+      <button class="hs-mini danger" data-action="cp-delete" data-id="${c.id}">삭제</button>
+    </div>
+  </article>`;
+}
+
+function complaintsPage() {
+  const open = db.complaints.filter(c => c.status !== 'done').sort((a, b) => b.createdAt - a.createdAt);
+  const done = db.complaints.filter(c => c.status === 'done').sort((a, b) => b.createdAt - a.createdAt);
+  return `
+  <header class="bar"><button class="icon-btn" data-action="back" aria-label="뒤로">${IC.back}</button><h2>민원처리</h2></header>
+  <section class="cp-head two">
+    <div><small>접수된 민원</small><b>${open.length}건</b></div>
+    <div><small>처리 완료</small><b>${done.length}건</b></div>
+  </section>
+  <div class="bill-add"><button class="cp-new" data-action="cp-new">＋ 민원 접수</button></div>
+
+  <h2 class="hs-sec">접수된 민원</h2>
+  ${open.length ? open.map(complaintCard).join('') : emptyBox('🛠️', '접수된 민원이 없어요')}
+
+  ${done.length ? `<h2 class="hs-sec">처리 완료</h2>${done.map(complaintCard).join('')}` : ''}
+  <div style="height:10px"></div>`;
+}
+
+function billCard(r, focusId) {
+  const paid = !!r.paid;
+  return `
+  <article class="bill ${paid ? 'is-paid' : ''}">
+    <div class="bill-top">
+      <div class="bill-place">
+        <b>${esc(placeOf(r) || '장소 미정')}</b>
+        <small>${dateLabel(r.date)} · ${r.complaintId ? '민원 처리' : '직접 청구'}</small>
+      </div>
+      <span class="cp-tag ${paid ? 'done' : ''}">${paid ? '받음' : '미수'}</span>
+    </div>
+    ${r.item ? `<p class="bill-item">${esc(r.item)}</p>` : ''}
+    ${r.phone ? `<a class="cp-phone" href="${telHref(r.phone)}">📞 ${esc(r.phone)}</a>` : ''}
+    <div class="bill-amt">
+      <input class="bill-input" inputmode="numeric" placeholder="금액 입력" value="${r.amount ? r.amount.toLocaleString('ko-KR') : ''}" data-money ${focusId === r.id ? 'data-autofocus' : ''}>
+      <span>원</span>
+      <button class="hs-mini" data-action="bill-save" data-id="${r.id}">금액 저장</button>
+    </div>
+    <div class="cp-btns">
+      <button class="hs-mini ghost" data-action="hs-toggle-paid" data-id="${r.id}">${paid ? '받음 취소' : '받음 표시'}</button>
+      <button class="hs-mini ghost" data-action="bill-edit" data-id="${r.id}">수정</button>
+      <button class="hs-mini danger" data-action="bill-delete" data-id="${r.id}">삭제</button>
+    </div>
+  </article>`;
+}
+
+function billingPage(focusId) {
+  const list = [...db.repairs].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const total = repairAmount(list);
+  const paid = repairAmount(list.filter(r => r.paid));
+  return `
+  <header class="bar"><button class="icon-btn" data-action="back" aria-label="뒤로">${IC.back}</button><h2>청구내역</h2></header>
+  <section class="cp-head">
+    <div><small>총 청구</small><b>${won(total)}</b></div>
+    <div><small>받은 금액</small><b>${won(paid)}</b></div>
+    <div><small>받을 금액</small><b class="warn">${won(total - paid)}</b></div>
+  </section>
+  <div class="bill-add"><button class="cp-new" data-action="hs-repair">＋ 직접 청구 추가</button></div>
+  ${list.length
+    ? list.map(r => billCard(r, focusId)).join('')
+    : emptyBox('🧾', '청구 내역이 없어요', '<p class="cp-note">민원을 처리 완료하면 여기에 자동으로 나와요</p>')}
+  <div style="height:10px"></div>`;
+}
+
+function billForm(r) {
+  openSheet(`
+  <form class="form" id="bill-form" autocomplete="off">
+    <h2>청구 수정</h2>
+    ${housingDatalist()}
+    <label class="f">건물이름<input name="building" list="hs-buildings" value="${esc(r.building)}"></label>
+    <div class="f-row">
+      <label class="f">호수<input name="unit" value="${esc(r.unit)}"></label>
+      <label class="f">전화번호<input name="phone" type="tel" inputmode="tel" value="${esc(r.phone)}"></label>
+    </div>
+    <label class="f">고장 · 수리 내용<textarea name="item" rows="3">${esc(r.item)}</textarea></label>
+    <div class="f-row">
+      <label class="f">청구 금액 (원)<input name="amount" inputmode="numeric" value="${r.amount ? r.amount.toLocaleString('ko-KR') : ''}" data-money></label>
+      <label class="f">날짜<input type="date" name="date" value="${r.date || today()}"></label>
+    </div>
+    <label class="f">메모<input name="memo" value="${esc(r.memo)}"></label>
+    <button class="btn dark big" type="submit">저장하기</button>
+  </form>`, sheet => {
+    const form = $('#bill-form', sheet);
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = new FormData(form);
+      Object.assign(r, {
+        building: f.get('building').trim(), unit: f.get('unit').trim(), phone: f.get('phone').trim(),
+        item: f.get('item').trim(), amount: toNum(f.get('amount')), date: f.get('date') || r.date, memo: f.get('memo').trim(),
+      });
+      save();
+      await closeSheet();
+      toast('수정했어요');
+      refresh();
+    });
+  });
+}
+
+// 청구 금액칸에서 Enter를 누르면 바로 저장
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.matches && e.target.matches('.bill-input')) {
+    e.preventDefault();
+    e.target.closest('.bill')?.querySelector('[data-action=bill-save]')?.click();
+  }
+});
+
 /* ---------- 샘플 / 백업 ---------- */
 function loadSample() {
   const people = [
@@ -1224,6 +1402,7 @@ async function importBackup(file) {
     db = data.db;
     db.repairs ||= [];
     db.repairPhotos ||= [];
+    db.complaints ||= [];
     db.types ||= [...DEFAULT_TYPES];
     save();
     toast('복원했어요');
@@ -1317,6 +1496,58 @@ const actions = {
     save();
     await closeSheet();
     refresh();
+  },
+  'hs-complaints': () => go('complaints'),
+  'hs-billing': () => go('billing'),
+  'cp-new': () => complaintForm(),
+  'cp-edit'(el) {
+    const c = db.complaints.find(x => x.id === el.dataset.id);
+    if (c) complaintForm(c);
+  },
+  'cp-done'(el) {
+    const c = db.complaints.find(x => x.id === el.dataset.id);
+    if (!c || c.status === 'done') return;
+    // 처리 완료 → 청구내역에 금액 0원으로 넣고, 바로 금액 입력칸으로 이동
+    const rec = {
+      id: uid(), building: c.building, unit: c.unit, phone: c.phone, item: c.content,
+      amount: 0, date: today(), memo: '', paid: false, complaintId: c.id, createdAt: Date.now(),
+    };
+    db.repairs.push(rec);
+    Object.assign(c, { status: 'done', doneAt: Date.now(), billingId: rec.id });
+    save();
+    toast('처리 완료! 청구 금액을 넣어 주세요');
+    go('billing/' + rec.id);
+  },
+  'cp-delete'(el) {
+    const c = db.complaints.find(x => x.id === el.dataset.id);
+    if (!c || !confirm('이 민원을 삭제할까요?\n청구내역은 그대로 남아요.')) return;
+    db.complaints = db.complaints.filter(x => x !== c);
+    save();
+    refresh();
+    toast('민원을 삭제했어요');
+  },
+  'bill-open': () => go('billing'),
+  'bill-save'(el) {
+    const r = db.repairs.find(x => x.id === el.dataset.id);
+    if (!r) return;
+    const v = toNum(el.closest('.bill').querySelector('.bill-input').value);
+    r.amount = v;
+    save();
+    refresh();
+    toast(v ? `${won(v)}으로 저장했어요` : '금액을 비웠어요');
+  },
+  'bill-edit'(el) {
+    const r = db.repairs.find(x => x.id === el.dataset.id);
+    if (r) billForm(r);
+  },
+  'bill-delete'(el) {
+    const r = db.repairs.find(x => x.id === el.dataset.id);
+    if (!r || !confirm('이 청구 내역을 삭제할까요?')) return;
+    db.repairs = db.repairs.filter(x => x !== r);
+    db.complaints.forEach(c => { if (c.billingId === r.id) c.billingId = null; });
+    save();
+    refresh();
+    toast('청구 내역을 삭제했어요');
   },
   'toggle-pw'(el) { el.classList.toggle('on'); },
   'edit-types'(el) {
@@ -1445,7 +1676,7 @@ const actions = {
     if (!confirm('정말 모든 일정·고객·사진을 삭제할까요?\n되돌릴 수 없어요.')) return;
     await PhotoDB.clear();
     urlCache.clear();
-    db = { customers: [], jobs: [], types: [...DEFAULT_TYPES], repairs: [], repairPhotos: [] };
+    db = { customers: [], jobs: [], types: [...DEFAULT_TYPES], repairs: [], repairPhotos: [], complaints: [] };
     save();
     toast('모두 삭제했어요');
     go('home');

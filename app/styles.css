@@ -482,3 +482,42 @@ body.detail #tabbar { display: none; }
 .hs-pick { display: flex; align-items: center; justify-content: center; height: 52px; border: 1.5px dashed #9DB3C9; border-radius: 16px; color: #1F3A5F; font-weight: 800; margin-bottom: 6px; cursor: pointer; }
 .hs-viewer-grid { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 6px; padding: 6px; }
 .hs-viewer-grid img { width: 100%; object-fit: contain; }
+
+/* ---------- 민원처리 · 청구내역 ---------- */
+.hs-complaint { margin: 16px 16px 0; width: calc(100% - 32px); display: flex; align-items: center; gap: 14px; padding: 18px; border-radius: 22px; background: linear-gradient(135deg, #FF7A45, #FFB15C); color: #fff; text-align: left; box-shadow: 0 8px 22px rgba(255, 122, 69, .28); }
+.hs-complaint:active { transform: scale(.985); }
+.hs-complaint > span:first-child { width: 52px; height: 52px; border-radius: 16px; background: rgba(255, 255, 255, .25); display: grid; place-items: center; font-size: 26px; flex: none; }
+.hs-complaint > div { flex: 1; min-width: 0; }
+.hs-complaint b { display: block; font-size: 17px; font-weight: 800; }
+.hs-complaint small { display: block; font-size: 12.5px; opacity: .92; margin-top: 3px; font-weight: 600; }
+.hs-complaint .i { width: 22px; height: 22px; stroke: #fff; flex: none; }
+.cp-head { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 16px 16px 4px; }
+.cp-head.two { grid-template-columns: 1fr 1fr; }
+.cp-head > div { background: #fff; border-radius: 18px; padding: 14px; box-shadow: 0 2px 10px rgba(31, 58, 95, .05); }
+.cp-head small { display: block; font-size: 12px; color: #7A8CA3; font-weight: 700; }
+.cp-head b { display: block; font-size: 16px; font-weight: 800; color: #1F3A5F; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.cp-head b.warn { color: #E0612B; }
+.bill-add { padding: 10px 16px 0; }
+.cp-new { width: 100%; height: 50px; border-radius: 16px; background: #1F3A5F; color: #fff; font-weight: 800; font-size: 15px; }
+.cp-card, .bill { margin: 0 16px 12px; padding: 16px; background: #fff; border-radius: 22px; box-shadow: 0 2px 12px rgba(31, 58, 95, .06); }
+.cp-card.is-done { opacity: .85; }
+.cp-top, .bill-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cp-tag { font-size: 11.5px; font-weight: 800; padding: 4px 10px; border-radius: 999px; background: #FFE6D6; color: #C65A1E; white-space: nowrap; }
+.cp-tag.done { background: #DDF5EA; color: #13875A; }
+.cp-date { font-size: 12.5px; color: #7A8CA3; font-weight: 700; }
+.cp-place { display: block; font-size: 17px; font-weight: 800; color: #1F3A5F; margin-top: 10px; }
+.cp-phone { display: inline-block; margin-top: 4px; font-size: 14px; font-weight: 800; color: #2F6E8F; }
+.cp-phone.muted { color: #B0BCC9; font-weight: 600; }
+.cp-content { margin-top: 10px; font-size: 14.5px; line-height: 1.55; color: #33475B; white-space: pre-wrap; }
+.cp-note { font-size: 12.5px; color: #7A8CA3; font-weight: 600; margin: 6px 2px 14px; }
+.cp-btns { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
+.hs-mini.ghost { background: #EEF3F8; color: #1F3A5F; }
+.hs-mini.danger { background: #FDECEC; color: #D8432F; }
+.bill-place b { display: block; font-size: 16px; font-weight: 800; color: #1F3A5F; }
+.bill-place small { font-size: 12.5px; color: #7A8CA3; font-weight: 600; }
+.bill-item { margin-top: 8px; font-size: 14.5px; color: #33475B; line-height: 1.5; }
+.bill-amt { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.bill-input { flex: 1; min-width: 0; height: 48px; padding: 0 14px; border: 1.5px solid #E1E8F0; border-radius: 14px; background: #F7F9FC; font-size: 17px; font-weight: 800; text-align: right; color: #1F3A5F; outline: none; }
+.bill-input:focus { border-color: #2F6E8F; background: #fff; }
+.bill-amt > span { font-weight: 800; color: #1F3A5F; }
+.bill.is-paid { opacity: .88; }
