@@ -350,7 +350,7 @@ function home() {
   const unpaid = db.jobs.filter(j => j.done && !j.paid);
   const weekJobs = db.jobs.filter(j => j.date > t && j.date <= addDays(t, 7));
   const tomorrow = jobsOn(addDays(t, 1)).length;
-  const upcoming = db.jobs.filter(j => j.date >= t && !j.done).sort(byDateTime).slice(0, 5);
+  const upcoming = db.jobs.filter(j => j.date >= t && !j.done).sort(byDateTime).slice(0, 50);
   const isEmpty = !db.jobs.length && !db.customers.length;
 
   const headline = td.length
