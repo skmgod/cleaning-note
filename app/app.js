@@ -21,9 +21,9 @@ let db = load();
 function load() {
   try {
     const d = JSON.parse(localStorage.getItem(KEY));
-    if (d && Array.isArray(d.jobs)) { d.types ||= [...DEFAULT_TYPES]; d.repairs ||= []; d.repairPhotos ||= []; d.complaints ||= []; return d; }
+    if (d && Array.isArray(d.jobs)) { d.types ||= [...DEFAULT_TYPES]; d.repairs ||= []; d.repairPhotos ||= []; d.complaints ||= []; d.housingNotes ||= []; return d; }
   } catch (e) { /* 손상된 데이터면 새로 시작 */ }
-  return { customers: [], jobs: [], types: [...DEFAULT_TYPES], repairs: [], repairPhotos: [], complaints: [] };
+  return { customers: [], jobs: [], types: [...DEFAULT_TYPES], repairs: [], repairPhotos: [], complaints: [], housingNotes: [] };
 }
 function save() { localStorage.setItem(KEY, JSON.stringify(db)); }
 
@@ -686,9 +686,9 @@ function settings() {
   </section>
   <section class="card">
     <h3>🌐 AI 서버 연결</h3>
-    <p class="pay-note">그록·클로드·제미나이가 보낸 예약을 가져와요. 주소는 이 휴대폰에만 저장돼요.</p>
+    <p class="pay-note">그록·클로드·제미나이가 보낸 예약·민원·청구·메모를 가져와요. 주소는 이 휴대폰에만 저장돼요.</p>
     <label class="f">서버 주소<input id="sync-url" placeholder="https://.../inbox/비밀키" value="${esc(syncUrl())}"></label>
-    <div class="btn-row"><button class="btn ghost" data-action="sync-save">주소 저장</button><button class="btn yellow" data-action="sync-pull">예약 가져오기</button></div>
+    <div class="btn-row"><button class="btn ghost" data-action="sync-save">주소 저장</button><button class="btn yellow" data-action="sync-pull">서버에서 가져오기</button></div>
   </section>
   <section class="card">
     <h3>백업 · 복원</h3>
@@ -913,12 +913,33 @@ async function pullFromServer() {
   const res = await fetch(base, { cache: 'no-store' });
   if (!res.ok) throw new Error(`서버 응답이 없어요 (${res.status}). 주소를 확인해 주세요`);
   const { items = [] } = await res.json();
+  const n = { reservation: 0, complaint: 0, charge: 0, note: 0 };
   for (const it of items) {
-    if (it.type && !db.types.includes(it.type)) db.types.push(it.type);
-    db.jobs.push(newJob({
-      customerId: '', type: it.type || db.types[0] || '기타', date: it.date, time: it.time,
-      price: it.price || 0, memo: it.memo || '', building: it.building || '', unit: it.unit || '', doorPw: it.doorPw || '',
-    }));
+    const kind = ['complaint', 'charge', 'note'].includes(it.kind) ? it.kind : 'reservation';
+    n[kind]++;
+    if (kind === 'complaint') {
+      db.complaints.push({
+        id: uid(), building: it.building || '', unit: it.unit || '', phone: it.phone || '',
+        content: it.content || '', date: it.date || today(), status: 'open', billingId: null, createdAt: Date.now(),
+      });
+    } else if (kind === 'charge') {
+      db.repairs.push({
+        id: uid(), building: it.building || '', unit: it.unit || '', phone: it.phone || '',
+        item: it.item || '', amount: it.amount || 0, date: it.date || today(), memo: it.memo || '',
+        paid: false, complaintId: null, createdAt: Date.now(),
+      });
+    } else if (kind === 'note') {
+      db.housingNotes.push({
+        id: uid(), building: it.building || '', unit: it.unit || '', text: it.text || '',
+        date: it.date || today(), source: 'ai', createdAt: Date.now(),
+      });
+    } else {
+      if (it.type && !db.types.includes(it.type)) db.types.push(it.type);
+      db.jobs.push(newJob({
+        customerId: '', type: it.type || db.types[0] || '기타', date: it.date, time: it.time,
+        price: it.price || 0, memo: it.memo || '', building: it.building || '', unit: it.unit || '', doorPw: it.doorPw || '',
+      }));
+    }
   }
   if (items.length) {
     save(); // 휴대폰에 먼저 저장한 뒤에만 서버에서 지움
@@ -927,7 +948,12 @@ async function pullFromServer() {
       body: JSON.stringify({ ids: items.map(x => x.id) }),
     });
   }
-  return items.length;
+  const parts = [];
+  if (n.reservation) parts.push(`예약 ${n.reservation}건`);
+  if (n.complaint) parts.push(`민원 ${n.complaint}건`);
+  if (n.charge) parts.push(`청구 ${n.charge}건`);
+  if (n.note) parts.push(`메모 ${n.note}건`);
+  return { msg: items.length ? `${parts.join(' · ')}을 가져왔어요` : '새로 들어온 항목이 없어요' };
 }
 
 
@@ -938,7 +964,7 @@ const HOUSING_TEMPLATES = {
   '수리비 청구': ({ place, amount }) => `안녕하세요. ${place} 수리비 ${amount || '○○원'}을 청구드립니다. 입금 확인 후 연락 부탁드립니다.`,
   '직접 입력': () => '',
 };
-const housingBuildings = () => [...new Set([...db.jobs, ...db.repairs, ...db.complaints].map(x => (x.building || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+const housingBuildings = () => [...new Set([...db.jobs, ...db.repairs, ...db.complaints, ...db.housingNotes].map(x => (x.building || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
 const repairAmount = arr => arr.reduce((a, r) => a + (r.amount || 0), 0);
 const housingDatalist = () => `<datalist id="hs-buildings">${housingBuildings().map(b => `<option value="${esc(b)}">`).join('')}</datalist>`;
 
@@ -964,22 +990,43 @@ function housingSearch(q) {
   const hit = (...xs) => xs.some(x => String(x || '').includes(q));
   const custs = db.customers.filter(c => hit(c.name, c.phone, c.address));
   const jobs = db.jobs.filter(j => hit(j.building, j.unit, j.memo, cust(j.customerId)?.name)).sort(byDateTime);
-  const reps = db.repairs.filter(r => hit(r.building, r.unit, r.item, r.memo));
   const cps = db.complaints.filter(c => hit(c.building, c.unit, c.phone, c.content));
+  const reps = db.repairs.filter(r => hit(r.building, r.unit, r.item, r.memo));
+  const ns = db.housingNotes.filter(n => hit(n.building, n.unit, n.text));
   const rows = [
-    ...cps.map(c => `<button class="hs-row" data-action="hs-open" data-go="complaints"><b>${esc(placeOf(c) || '장소 미정')}</b><small>민원 · ${esc(String(c.content).slice(0, 30))}</small></button>`),
     ...custs.map(c => `<button class="hs-row" data-action="hs-open" data-go="customer/${c.id}"><b>${esc(c.name)}</b><small>고객 · ${esc(c.phone || c.address || '')}</small></button>`),
     ...jobs.map(j => `<button class="hs-row" data-action="hs-open" data-go="job/${j.id}"><b>${esc(jobTitle(j))}</b><small>예약 · ${dateLabel(j.date)} ${j.time}</small></button>`),
-    ...reps.map(r => `<button class="hs-row" data-action="hs-toggle-paid" data-id="${r.id}"><b>${esc(placeOf(r) || '장소 미정')}</b><small>수리 · ${esc(r.item || '')} · ${won(r.amount)}</small></button>`),
+    ...cps.map(c => `<button class="hs-row" data-action="hs-open" data-go="complaints"><b>${esc(placeOf(c) || '장소 미정')}</b><small>민원 · ${esc(String(c.content).slice(0, 30))}</small></button>`),
+    ...reps.map(r => `<button class="hs-row" data-action="hs-toggle-paid" data-id="${r.id}"><b>${esc(placeOf(r) || '장소 미정')}</b><small>청구 · ${esc(r.item || '')} · ${won(r.amount)}</small></button>`),
+    ...ns.map(n => `<button class="hs-row" data-action="memo-edit" data-id="${n.id}"><b>${esc(placeOf(n) || '건물 미정')}</b><small>메모 · ${esc(String(n.text).slice(0, 30))}</small></button>`),
   ];
   return rows.length ? rows.join('') : '<p class="hs-hint">찾는 내용이 없어요</p>';
 }
 
+function noteCard(n) {
+  const ai = n.source === 'ai';
+  return `
+  <article class="cp-card">
+    <div class="cp-top">
+      <span class="cp-tag ${ai ? 'ai' : ''}">${ai ? '🤖 AI 작성' : '직접 작성'}</span>
+      <span class="cp-date">${dateLabel(n.date)}</span>
+    </div>
+    <b class="cp-place">${esc(placeOf(n) || '건물 미정')}</b>
+    <p class="cp-content">${esc(n.text)}</p>
+    <div class="cp-btns">
+      <button class="hs-mini ghost" data-action="memo-edit" data-id="${n.id}">수정</button>
+      <button class="hs-mini danger" data-action="memo-delete" data-id="${n.id}">삭제</button>
+    </div>
+  </article>`;
+}
+
 function housingPage() {
-  const repairs = [...db.repairs].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const repairs = [...db.repairs].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   const unpaid = repairs.filter(r => !r.paid);
   const monthKey = today().slice(0, 7);
   const thisMonth = repairs.filter(r => (r.date || '').startsWith(monthKey)).length;
+  const notes = [...db.housingNotes].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const openCount = db.complaints.filter(c => c.status !== 'done').length;
   return `
   <section class="hs-head">
     <p class="hs-kicker">HOUSING CARE</p>
@@ -988,11 +1035,22 @@ function housingPage() {
     <div class="hs-stats">
       <div><small>받을 수리비</small><b>${man(repairAmount(unpaid))}</b></div>
       <div><small>이번 달 수리</small><b>${thisMonth}건</b></div>
-      <div><small>수리 사진</small><b>${db.repairPhotos.reduce((a, p) => a + p.pids.length, 0)}장</b></div>
+      <div><small>접수된 민원</small><b>${openCount}건</b></div>
     </div>
   </section>
 
-  <button class="hs-complaint" data-action="hs-complaints"><span>🛠️</span><div><b>민원처리</b><small>고장 신고 접수 → 처리 완료 → 청구내역</small></div><svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+  <button class="hs-complaint" data-action="hs-complaints">
+    <span>🛠️</span>
+    <div><b>민원처리</b><small>${openCount ? `접수된 민원 ${openCount}건 · 처리 완료하면 청구내역으로` : '고장 신고 접수 → 처리 완료 → 청구내역'}</small></div>
+    <svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+  </button>
+
+  <button class="hs-ai" data-action="hs-paste">
+    <span>🤖</span>
+    <div><b>AI 답 붙여넣기</b><small>그록·제미나이가 쓴 민원·청구·메모를 알맞은 칸에 채워요</small></div>
+    <svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+  </button>
+
   <section class="hs-grid">
     <button class="hs-btn" data-action="hs-search"><span class="hs-ico" style="background:#DDF3FF">🔍</span><b>검색</b><small>건물 · 호수 · 고객</small></button>
     <button class="hs-btn" data-action="hs-billing"><span class="hs-ico" style="background:#FFE6D6">🧾</span><b>청구내역</b><small>금액 입력 · 수정 · 삭제</small></button>
@@ -1000,8 +1058,14 @@ function housingPage() {
     <button class="hs-btn" data-action="hs-sms"><span class="hs-ico" style="background:#EDE4FF">💬</span><b>문자</b><small>안내 · 청구 문자</small></button>
   </section>
 
+  <h2 class="hs-sec">메모</h2>
+  <div class="bill-add"><button class="cp-new" data-action="memo-new">＋ 메모 추가</button></div>
+  ${notes.length
+    ? notes.slice(0, 20).map(noteCard).join('')
+    : emptyBox('📝', '아직 메모가 없어요', '<p class="cp-note">그록에게 "주택관리 메모 남겨줘"라고 말하면 여기에 나와요</p>')}
+
   <h2 class="hs-sec">최근 수리 · 청구</h2>
-  ${repairs.length ? repairs.slice(0, 12).map(repairCard).join('') : `<div class="hs-empty"><span>🔧</span>아직 수리 기록이 없어요<br><button class="hs-cta" data-action="hs-repair">첫 수리비 청구 기록하기</button></div>`}
+  ${repairs.length ? repairs.slice(0, 12).map(repairCard).join('') : '<div class="hs-empty"><span>🧾</span>아직 청구 내역이 없어요</div>'}
 
   <h2 class="hs-sec">수리 사진</h2>
   ${db.repairPhotos.length
@@ -1011,8 +1075,124 @@ function housingPage() {
           ${p.pids.length > 1 ? `<i>${p.pids.length}</i>` : ''}
           <span>${esc(placeOf(p) || '장소 미정')}</span>
         </button>`).join('')}</div>`
-    : `<div class="hs-empty"><span>📷</span>아직 사진이 없어요</div>`}
+    : '<div class="hs-empty"><span>📷</span>아직 사진이 없어요</div>'}
   <div style="height:10px"></div>`;
+}
+
+// 주택관리 메모 (직접 작성 · AI 작성 공용)
+function memoForm(n = null, pre = {}) {
+  const v = n || pre;
+  openSheet(`
+  <form class="form" id="memo-form" autocomplete="off">
+    <h2>${n ? '메모 수정' : '주택관리 메모'}</h2>
+    ${housingDatalist()}
+    <label class="f">건물이름<input name="building" list="hs-buildings" placeholder="예: 래미안 아파트" value="${esc(v.building)}"></label>
+    <label class="f">호수<input name="unit" placeholder="예: 101동 1203호" value="${esc(v.unit)}"></label>
+    <label class="f">메모 내용<textarea name="text" rows="5" placeholder="예: 다음 달 소방 점검 예정. 관리실 열쇠 보관 중">${esc(v.text)}</textarea></label>
+    <button class="btn dark big" type="submit">${n ? '저장하기' : '메모 저장'}</button>
+  </form>`, sheet => {
+    const form = $('#memo-form', sheet);
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = new FormData(form);
+      const data = { building: f.get('building').trim(), unit: f.get('unit').trim(), text: f.get('text').trim() };
+      if (!data.text) { toast('메모 내용을 적어 주세요'); form.text.focus(); return; }
+      if (n) Object.assign(n, data);
+      else db.housingNotes.push({ id: uid(), ...data, date: today(), source: pre.source || 'manual', createdAt: Date.now() });
+      save();
+      await closeSheet();
+      toast(n ? '메모를 수정했어요' : '메모를 저장했어요');
+      refresh();
+    });
+  });
+}
+
+// AI 답 → 종류 인식: "민원:", "[청구]", "메모:" 같은 첫머리 표시로 구분
+const AI_KIND_TAGS = { 민원: 'complaint', 청구: 'charge', 수리비: 'charge', 메모: 'note', 예약: 'reservation' };
+const AI_TAG_RE = /^\s*(?:\[\s*(민원|청구|수리비|메모|예약)\s*\]\s*[:：]?|(민원|청구|수리비|메모|예약)\s*[:：]|(민원|청구|수리비|메모|예약)\s*$)\s*(.*)$/;
+
+function parseAiText(text) {
+  const src = String(text || '');
+  const lines = src.split(/\n/);
+  const firstNonEmpty = lines.findIndex(l => l.trim());
+  // "메모"는 첫 줄이거나 [메모]처럼 확실히 적힌 경우만 인식 (예약 글 안의 "메모:" 줄과 헷갈리지 않게)
+  const idx = lines.findIndex((l, i) => {
+    const m = l.match(AI_TAG_RE);
+    if (!m) return false;
+    const tag = m[1] || m[2] || m[3];
+    return tag !== '메모' || i === firstNonEmpty || !!m[1];
+  });
+  if (idx < 0) return { kind: 'reservation', text: src };
+  const m = lines[idx].match(AI_TAG_RE);
+  const kind = AI_KIND_TAGS[m[1] || m[2] || m[3]];
+  if (kind === 'reservation') return { kind, text: src };
+  const body = [m[4], ...lines.slice(idx + 1)].join('\n');
+  return { kind, fields: extractHousingFields(body) };
+}
+
+const HS_KEYS = [
+  [/^(건물이름|건물명|건물|장소|아파트|빌딩)$/, 'building'],
+  [/^(호|호수|동호수|호실)$/, 'unit'],
+  [/^(전화번호|전화|연락처|휴대폰|번호)$/, 'phone'],
+  [/^(고장신고내용|고장 신고 내용|신고내용|고장|내용|증상|요청)$/, 'content'],
+  [/^(수리내용|수리 내용|수리|항목|품목|작업)$/, 'item'],
+  [/^(금액|청구금액|청구 금액|수리비|비용|가격)$/, 'amount'],
+  [/^(날짜|일자|일정)$/, 'date'],
+  [/^(메모|비고|특이사항)$/, 'memo'],
+  [/^(비번|비밀번호)$/, 'doorPw'],
+];
+
+// "건물이름: 값" 줄은 그대로 쓰고, 나머지 글에서는 건물·호수·전화·금액·날짜를 찾아냄
+function extractHousingFields(body) {
+  const raw = {};
+  const free = [];
+  for (const line of String(body || '').split(/\n+/)) {
+    const t = line.replace(/^\s*[-*•]\s*/, '').trim();
+    if (!t) continue;
+    const m = t.match(/^([가-힣a-zA-Z ]{1,12}?)\s*[:：]\s*(.+)$/);
+    const hit = m && HS_KEYS.find(([re]) => re.test(m[1].trim()));
+    if (hit) raw[hit[1]] = raw[hit[1]] ? `${raw[hit[1]]} ${m[2].trim()}` : m[2].trim();
+    else free.push(t);
+  }
+  const all = free.join(' ');
+  const pm = (raw.phone || all).match(/0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}/);
+  const phone = pm ? pm[0].replace(/\s/g, '') : (raw.phone || '');
+  const building = (raw.building || findBuilding(all) || '').trim();
+  const unit = (raw.unit || extractUnit(all) || '').trim();
+  let rest = all;
+  if (!raw.building && building) rest = rest.replace(building, '');
+  if (!raw.unit && unit) rest = rest.replace(unit, '');
+  if (!raw.phone && pm) rest = rest.replace(pm[0], '');
+  rest = rest.replace(/\s+/g, ' ').trim();
+  return {
+    building,
+    unit,
+    phone,
+    content: (raw.content || rest).trim(),
+    item: (raw.item || raw.content || rest).trim(),
+    text: (raw.memo || raw.content || rest).trim(),
+    memo: (raw.memo || '').trim(),
+    amount: raw.amount ? (parsePrice(raw.amount) || toNum(raw.amount)) : parsePrice(all),
+    date: parseDate(raw.date || all, new Date()),
+    doorPw: (raw.doorPw || '').trim(),
+  };
+}
+
+// AI 답 붙여넣기 화면
+function openHousingPaste() {
+  openSheet(`
+  <form class="form hs-form" id="hs-paste-form" autocomplete="off">
+    <h2>🤖 AI 답 붙여넣기</h2>
+    <p class="cp-note">그록·제미나이 답을 그대로 붙여넣으세요. 첫 줄에 종류(민원·청구·메모)를 적으면 알맞은 칸에 채워져요.</p>
+    <div class="chips quick hs-tags">
+      <button type="button" class="chip-btn" data-action="hs-paste-tag" data-v="민원">민원</button>
+      <button type="button" class="chip-btn" data-action="hs-paste-tag" data-v="청구">청구</button>
+      <button type="button" class="chip-btn" data-action="hs-paste-tag" data-v="메모">메모</button>
+      <button type="button" class="chip-btn" data-action="hs-paste-tag" data-v="예약">예약</button>
+    </div>
+    <textarea id="hs-paste-text" rows="8" placeholder="예: 민원 / 건물이름: 래미안 아파트 / 호수: 101동 1203호 / 전화번호: 010-1234-5678 / 내용: 화장실 물이 안 내려감"></textarea>
+    <button class="btn dark big" type="button" data-action="hs-paste-fill">채우기</button>
+  </form>`, () => { $('#hs-paste-text').focus(); });
 }
 
 const HS_FORM_HEAD = '<form class="form hs-form" autocomplete="off">';
@@ -1032,43 +1212,52 @@ function openHousingSearch() {
 }
 
 // 수리비 청구
-function openRepairForm() {
+// 청구 추가 (직접 추가 · AI 답 붙여넣기 공용)
+function openRepairForm(pre = {}) {
   openSheet(`
   <form class="form" id="hs-rep-form" autocomplete="off">
-    <h2>수리비 청구</h2>
+    <h2>청구 추가</h2>
     ${housingDatalist()}
-    <label class="f">건물명<input name="building" list="hs-buildings" placeholder="예: 래미안 아파트"></label>
+    <label class="f">건물이름<input name="building" list="hs-buildings" placeholder="예: 래미안 아파트" value="${esc(pre.building)}"></label>
     <div class="f-row">
-      <label class="f">호수<input name="unit" placeholder="예: 101동 1203호"></label>
-      <label class="f">날짜<input type="date" name="date" value="${today()}" required></label>
+      <label class="f">호수<input name="unit" placeholder="예: 101동 1203호" value="${esc(pre.unit)}"></label>
+      <label class="f">전화번호<input name="phone" type="tel" inputmode="tel" placeholder="010-0000-0000" value="${esc(pre.phone)}"></label>
     </div>
-    <label class="f">수리 내용<input name="item" placeholder="예: 싱크대 누수 수리"></label>
-    <label class="f">수리비 (원)<input name="amount" inputmode="numeric" placeholder="예: 80,000" data-money></label>
+    <label class="f">수리 내용<input name="item" placeholder="예: 싱크대 누수 수리" value="${esc(pre.item)}"></label>
+    <div class="f-row">
+      <label class="f">청구 금액 (원)<input name="amount" inputmode="numeric" placeholder="모르면 비워 두세요" value="${pre.amount ? Number(pre.amount).toLocaleString('ko-KR') : ''}" data-money></label>
+      <label class="f">날짜<input type="date" name="date" value="${pre.date || today()}" required></label>
+    </div>
     <div class="chips quick">${[30000, 50000, 80000, 100000, 150000].map(v => `<button type="button" class="chip-btn" data-action="hs-set-amount" data-v="${v}">${man(v)}</button>`).join('')}</div>
-    <label class="f">메모<textarea name="memo" rows="2" placeholder="특이사항"></textarea></label>
+    <label class="f">메모<textarea name="memo" rows="2" placeholder="특이사항">${esc(pre.memo)}</textarea></label>
     <button class="btn dark big" type="submit">청구 기록 저장</button>
   </form>`, sheet => {
     const form = $('#hs-rep-form', sheet);
+    // 같은 건물의 지난 기록에서 호수·전화번호를 채워줌 (비어 있을 때만)
     form.building.addEventListener('change', () => {
-      const last = db.repairs.filter(r => r.building === form.building.value.trim() && r.unit).pop();
-      if (last && !form.unit.value) form.unit.value = last.unit;
+      const b = form.building.value.trim();
+      const same = [...db.repairs, ...db.complaints].filter(x => x.building === b);
+      const u = same.filter(x => x.unit).pop();
+      if (u && !form.unit.value) form.unit.value = u.unit;
+      const p = same.filter(x => x.phone).pop();
+      if (p && !form.phone.value) form.phone.value = p.phone;
     });
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const f = new FormData(form);
-      const amount = toNum(f.get('amount'));
-      if (!amount) { toast('수리비 금액을 입력해 주세요'); form.amount.focus(); return; }
       db.repairs.push({
-        id: uid(), building: f.get('building').trim(), unit: f.get('unit').trim(), item: f.get('item').trim(),
-        amount, date: f.get('date'), memo: f.get('memo').trim(), paid: false, createdAt: Date.now(),
+        id: uid(), building: f.get('building').trim(), unit: f.get('unit').trim(), phone: f.get('phone').trim(),
+        item: f.get('item').trim(), amount: toNum(f.get('amount')), date: f.get('date') || today(),
+        memo: f.get('memo').trim(), paid: false, complaintId: null, createdAt: Date.now(),
       });
       save();
       await closeSheet();
-      toast('수리비 청구를 기록했어요');
+      toast('청구를 기록했어요');
       refresh();
     });
   });
 }
+
 
 // 수리 사진
 function openRepairPhotoForm() {
@@ -1153,19 +1342,20 @@ function openHousingSms() {
 
 /* ---------- 민원처리 → 청구내역 ---------- */
 // 고장 신고(민원)를 접수하고, 처리 완료하면 청구내역으로 넘어가 금액을 바로 넣습니다.
-function complaintForm(c = null) {
+function complaintForm(c = null, pre = {}) {
   const isNew = !c;
+  const v = c || pre;
   openSheet(`
   <form class="form" id="cp-form" autocomplete="off">
     <h2>${isNew ? '민원 접수' : '민원 수정'}</h2>
     ${housingDatalist()}
-    <label class="f">건물이름<input name="building" list="hs-buildings" placeholder="예: 래미안 아파트" value="${esc(c?.building)}"></label>
+    <label class="f">건물이름<input name="building" list="hs-buildings" placeholder="예: 래미안 아파트" value="${esc(v.building)}"></label>
     <div class="f-row">
-      <label class="f">호수<input name="unit" placeholder="예: 101동 1203호" value="${esc(c?.unit)}"></label>
-      <label class="f">전화번호<input name="phone" type="tel" inputmode="tel" placeholder="010-0000-0000" value="${esc(c?.phone)}"></label>
+      <label class="f">호수<input name="unit" placeholder="예: 101동 1203호" value="${esc(v.unit)}"></label>
+      <label class="f">전화번호<input name="phone" type="tel" inputmode="tel" placeholder="010-0000-0000" value="${esc(v.phone)}"></label>
     </div>
     <label class="f">고장 신고 내용
-      <textarea name="content" rows="5" placeholder="예: 화장실 변기 물이 안 내려감. 오후 3시 이후 방문 요청">${esc(c?.content)}</textarea>
+      <textarea name="content" rows="5" placeholder="예: 화장실 변기 물이 안 내려감. 오후 3시 이후 방문 요청">${esc(v.content)}</textarea>
     </label>
     <p class="cp-note">시간이나 요청 사항도 여기에 자유롭게 적어 주세요.</p>
     <button class="btn dark big" type="submit">${isNew ? '민원 접수' : '저장하기'}</button>
@@ -1196,6 +1386,7 @@ function complaintForm(c = null) {
     });
   });
 }
+
 
 function complaintCard(c) {
   const isDone = c.status === 'done';
@@ -1403,6 +1594,7 @@ async function importBackup(file) {
     db.repairs ||= [];
     db.repairPhotos ||= [];
     db.complaints ||= [];
+    db.housingNotes ||= [];
     db.types ||= [...DEFAULT_TYPES];
     save();
     toast('복원했어요');
@@ -1446,8 +1638,8 @@ const actions = {
   },
   async 'sync-pull'() {
     try {
-      const n = await pullFromServer();
-      toast(n ? `예약 ${n}건을 가져왔어요` : '새로 들어온 예약이 없어요');
+      const r = await pullFromServer();
+      toast(r.msg);
       refresh();
     } catch (e) {
       toast(e.message || '가져오지 못했어요. 인터넷을 확인해 주세요');
@@ -1548,6 +1740,35 @@ const actions = {
     save();
     refresh();
     toast('청구 내역을 삭제했어요');
+  },
+  'hs-paste': () => openHousingPaste(),
+  'hs-paste-tag'(el) {
+    const ta = $('#hs-paste-text');
+    const tag = `${el.dataset.v}:`;
+    if (!ta.value.trim().startsWith(tag)) ta.value = `${tag}\n${ta.value}`;
+    ta.focus();
+  },
+  'hs-paste-fill'() {
+    const text = $('#hs-paste-text').value;
+    if (!text.trim()) { toast('내용을 붙여넣어 주세요'); return; }
+    const r = parseAiText(text);
+    if (r.kind === 'complaint') complaintForm(null, r.fields);
+    else if (r.kind === 'charge') openRepairForm(r.fields);
+    else if (r.kind === 'note') memoForm(null, { building: r.fields.building, unit: r.fields.unit, text: r.fields.text, source: 'ai' });
+    else { openJobForm(null, {}); applyParsed($('#job-form'), parseReservation(r.text)); }
+  },
+  'memo-new': () => memoForm(),
+  'memo-edit'(el) {
+    const n = db.housingNotes.find(x => x.id === el.dataset.id);
+    if (n) memoForm(n);
+  },
+  'memo-delete'(el) {
+    const n = db.housingNotes.find(x => x.id === el.dataset.id);
+    if (!n || !confirm('이 메모를 삭제할까요?')) return;
+    db.housingNotes = db.housingNotes.filter(x => x !== n);
+    save();
+    refresh();
+    toast('메모를 삭제했어요');
   },
   'toggle-pw'(el) { el.classList.toggle('on'); },
   'edit-types'(el) {
@@ -1676,7 +1897,7 @@ const actions = {
     if (!confirm('정말 모든 일정·고객·사진을 삭제할까요?\n되돌릴 수 없어요.')) return;
     await PhotoDB.clear();
     urlCache.clear();
-    db = { customers: [], jobs: [], types: [...DEFAULT_TYPES], repairs: [], repairPhotos: [], complaints: [] };
+    db = { customers: [], jobs: [], types: [...DEFAULT_TYPES], repairs: [], repairPhotos: [], complaints: [], housingNotes: [] };
     save();
     toast('모두 삭제했어요');
     go('home');
