@@ -1,0 +1,9 @@
+# Cloudflare 배포 설정. 자세한 방법은 README.md 참고
+name = "cleannote-mcp"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# 보관함 저장소 (Cloudflare 대시보드에서 만든 KV 이름을 넣어요. README 참고)
+[[kv_namespaces]]
+binding = "KV"
+id = "여기에_KV_ID_입력"

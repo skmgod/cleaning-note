@@ -684,6 +684,12 @@ function settings() {
     <button class="set-item" data-action="sample"><span class="emo">🧪</span><span>샘플 데이터 넣기<small>기능을 둘러볼 수 있는 예시 고객·일정</small></span></button>
   </section>
   <section class="card">
+    <h3>🌐 AI 서버 연결</h3>
+    <p class="pay-note">그록·클로드·제미나이가 보낸 예약을 가져와요. 주소는 이 휴대폰에만 저장돼요.</p>
+    <label class="f">서버 주소<input id="sync-url" placeholder="https://.../inbox/비밀키" value="${esc(syncUrl())}"></label>
+    <div class="btn-row"><button class="btn ghost" data-action="sync-save">주소 저장</button><button class="btn yellow" data-action="sync-pull">예약 가져오기</button></div>
+  </section>
+  <section class="card">
     <h3>백업 · 복원</h3>
     <button class="set-item" data-action="export"><span class="emo">💾</span><span>백업 파일 내보내기<small>일정·고객·사진을 파일 하나로 저장</small></span></button>
     <label class="set-item"><span class="emo">📂</span><span>백업 파일 불러오기<small>현재 데이터를 백업 내용으로 바꿔요</small></span><input type="file" accept="application/json,.json" hidden data-import></label>
@@ -896,6 +902,33 @@ function stopTimer(j) {
   j.durationMin = Math.max(1, Math.round((j.endedAt - j.startedAt) / 60000));
 }
 
+/* ---------- AI 서버 보관함 → 휴대폰 ---------- */
+// 그록·클로드·제미나이가 보관함에 넣은 예약을 가져옵니다. 주소는 이 휴대폰에만 저장돼요.
+const SYNC_KEY = 'cleannote.sync';
+const syncUrl = () => { try { return localStorage.getItem(SYNC_KEY) || ''; } catch { return ''; } };
+async function pullFromServer() {
+  const base = syncUrl().trim().replace(/\/+$/, '');
+  if (!base) throw new Error('서버 주소를 먼저 넣고 저장해 주세요');
+  const res = await fetch(base, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`서버 응답이 없어요 (${res.status}). 주소를 확인해 주세요`);
+  const { items = [] } = await res.json();
+  for (const it of items) {
+    if (it.type && !db.types.includes(it.type)) db.types.push(it.type);
+    db.jobs.push(newJob({
+      customerId: '', type: it.type || db.types[0] || '기타', date: it.date, time: it.time,
+      price: it.price || 0, memo: it.memo || '', building: it.building || '', unit: it.unit || '', doorPw: it.doorPw || '',
+    }));
+  }
+  if (items.length) {
+    save(); // 휴대폰에 먼저 저장한 뒤에만 서버에서 지움
+    await fetch(base + '/ack', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: items.map(x => x.id) }),
+    });
+  }
+  return items.length;
+}
+
 /* ---------- 샘플 / 백업 ---------- */
 function loadSample() {
   const people = [
@@ -1012,6 +1045,21 @@ const actions = {
   'paste-fill'(el) {
     const form = el.closest('form');
     applyParsed(form, parseReservation($('#ai-text', form).value));
+  },
+  async 'sync-pull'() {
+    try {
+      const n = await pullFromServer();
+      toast(n ? `예약 ${n}건을 가져왔어요` : '새로 들어온 예약이 없어요');
+      refresh();
+    } catch (e) {
+      toast(e.message || '가져오지 못했어요. 인터넷을 확인해 주세요');
+    }
+  },
+  'sync-save'() {
+    const v = $('#sync-url').value.trim();
+    try { localStorage.setItem(SYNC_KEY, v); } catch { /* 저장 불가 환경 */ }
+    toast(v ? '서버 주소를 저장했어요' : '서버 주소를 지웠어요');
+    refresh();
   },
   'toggle-pw'(el) { el.classList.toggle('on'); },
   'edit-types'(el) {
