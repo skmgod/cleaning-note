@@ -130,6 +130,7 @@ function parseReservation(text, types = db.types, now = new Date()) {
     price: parsePrice(raw.price || s),
     type: matchType(raw.type || s, types),
     memo: (raw.memo || '').trim(),
+    phone: findPhone(raw.phone || s),
   };
   return Object.fromEntries(Object.entries(out).filter(([, v]) => v));
 }
@@ -215,6 +216,7 @@ function applyParsed(form, p) {
   if (p.building) { form.building.value = p.building; form.building.dispatchEvent(new Event('change')); filled.push('건물명'); }
   if (p.unit) { form.unit.value = p.unit; filled.push('호수'); }
   if (p.doorPw) { form.doorPw.value = p.doorPw; filled.push('비밀번호'); }
+  if (p.phone && form.phone) { form.phone.value = p.phone; filled.push('전화번호'); }
   if (p.date) { form.date.value = p.date; filled.push('날짜'); }
   if (p.time) { form.time.value = p.time; filled.push('시간'); }
   if (p.price) { form.price.value = p.price.toLocaleString('ko-KR'); filled.push('금액'); }
@@ -300,7 +302,7 @@ function jobCard(j, showDate = false) {
   <article class="job ${j.done ? 'is-done' : ''}" data-go="job/${j.id}">
     <button class="check ${j.done ? 'on' : ''}" data-action="toggle-done" data-id="${j.id}" aria-label="완료 체크">${IC.check}</button>
     <div class="job-main">
-      <p class="job-meta">${showDate ? `${d.getMonth() + 1}/${d.getDate()}(${WD[d.getDay()]}) · ` : ''}${j.time} · ${t.emoji} ${t.id}</p>
+      <p class="job-meta">${showDate ? `${d.getMonth() + 1}/${d.getDate()}(${WD[d.getDay()]}) · ` : ''}${j.time} · ${t.emoji} ${t.id}${j.source === 'housing' ? ' · 🏢 주택관리' : ''}</p>
       <p class="job-name">${esc(jobTitle(j))}</p>
       ${placeOf(j) || c?.address ? `<p class="job-addr">${esc(placeOf(j) || c.address)}</p>` : ''}
     </div>
@@ -328,6 +330,7 @@ function resvCard(j) {
       </div>
       <span class="badge ${j.done ? 'done' : ''}">${j.done ? '완료' : '예약'}</span>
     </div>
+    ${j.phone ? `<a class="resv-call" href="${telHref(j.phone)}">📞 ${esc(j.phone)}</a>` : ''}
     <dl class="resv-info">
       <div><dt>건물명</dt><dd>${esc(j.building) || '<span class="muted">없음</span>'}</dd></div>
       <div><dt>호수</dt><dd>${esc(j.unit) || '<span class="muted">없음</span>'}</dd></div>
@@ -486,25 +489,59 @@ function customers() {
 /* ---------- 매출 ---------- */
 function stats() {
   const m = ui.statMonth, [y, mm] = m.split('-').map(Number);
-  const mj = db.jobs.filter(j => j.date.startsWith(m));
-  const done = mj.filter(j => j.done);
-  const sales = sum(done), paid = sum(done.filter(j => j.paid)), planned = sum(mj.filter(j => !j.done));
-  const timed = done.filter(j => j.durationMin > 0);
-  const avgMin = timed.length ? Math.round(timed.reduce((a, j) => a + j.durationMin, 0) / timed.length) : 0;
+  const rows = salesRows(m);
+  const isClean = r => r.kind === 'clean';
+  const cleanDirect = sumBy(rows.filter(r => isClean(r) && r.src === 'direct'), r => r.sales);
+  const cleanHouse = sumBy(rows.filter(r => isClean(r) && r.src === 'housing'), r => r.sales);
+  const houseRows = rows.filter(r => !isClean(r));
+  const houseSales = sumBy(houseRows, r => r.sales);
+  const houseRetail = sumBy(houseRows, r => r.retail);
+  const houseCost = sumBy(houseRows, r => r.wholesale);
+  const total = cleanDirect + cleanHouse + houseSales;
+  const unpaidAmt = sumBy(rows.filter(r => !r.paid), r => r.retail);
+  const paidAmt = sumBy(rows.filter(r => r.paid), r => r.retail);
 
+  // 최근 6개월 추이
   const months = Array.from({ length: 6 }, (_, i) => shiftMonth(m, i - 5));
-  const vals = months.map(k => sum(db.jobs.filter(j => j.done && j.date.startsWith(k))));
-  const max = Math.max(...vals, 1);
+  const hist = months.map(k => {
+    const rr = salesRows(k);
+    return {
+      direct: sumBy(rr.filter(r => r.kind === 'clean' && r.src === 'direct'), r => r.sales),
+      cleanHouse: sumBy(rr.filter(r => r.kind === 'clean' && r.src === 'housing'), r => r.sales),
+      house: sumBy(rr.filter(r => r.kind === 'housing'), r => r.sales),
+    };
+  });
 
-  const byType = [...new Set(done.map(j => j.type))].map(name => ({ t: typeOf(name), v: sum(done.filter(j => j.type === name)) }));
-  const tMax = Math.max(...byType.map(x => x.v), 1);
-  const byPay = PAY.map(p => ({ p, v: sum(done.filter(j => j.paid && j.payMethod === p)) })).filter(x => x.v);
-  const pMax = Math.max(...byPay.map(x => x.v), 1);
-  const unpaid = db.jobs.filter(j => j.done && !j.paid).sort(byDateTime);
+  // 묶어서 합계 (건물별 · 수리내용별 · 청소 종류별 · 결제 수단별)
+  const group = (list, keyFn) => {
+    const map = {};
+    for (const r of list) { const k = keyFn(r) || '기타'; map[k] = (map[k] || 0) + r.sales; }
+    return Object.entries(map).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+  };
+  const topBld = group(rows, r => r.bld || r.place).slice(0, 5);
+  const byItem = group(houseRows, r => r.what).slice(0, 6);
+  const byType = group(rows.filter(isClean), r => r.what).slice(0, 6);
+  const byPay = PAY.map(p => ({ label: p, value: sumBy(rows.filter(r => r.paid && r.pay === p), r => r.sales) })).filter(x => x.value);
+
+  const rowHtml = r => {
+    const tag = r.kind === 'housing' ? ['hs', '🏢 주택관리 수리'] : r.src === 'housing' ? ['hs', '🧹 청소 · 주택관리에서'] : ['cl', '🧹 청소 · 직접 고객'];
+    const payBtn = r.paid ? '<span class="sl-paid">받음</span>'
+      : `<button class="mini-btn" data-action="${r.kind === 'clean' ? 'quick-pay' : 'hs-toggle-paid'}" data-id="${r.id}">받음</button>`;
+    return `
+    <article class="sl-row ${r.paid ? 'is-paid' : ''}">
+      <div class="sl-main" data-action="sales-open" data-kind="${r.kind}" data-id="${r.id}">
+        <div class="sl-top"><span class="sl-badge ${tag[0]}">${tag[1]}</span><span class="sl-date">${dateLabel(r.date)}</span></div>
+        <b class="sl-place">${esc(r.place)}</b>
+        <p class="sl-what">${esc(r.what)}</p>
+        <div class="sl-nums"><span>소비자가격 ${won(r.retail)}</span>${r.kind === 'housing' ? `<span>도매가 ${won(r.wholesale)}</span>` : ''}<strong>매출 ${won(r.sales)}</strong></div>
+      </div>
+      <div class="sl-side">${payBtn}</div>
+    </article>`;
+  };
 
   return `
   <section class="page-head">
-    <div class="row"><h1>매출 · 통계</h1></div>
+    <div class="row"><h1>매출 · 그래프</h1></div>
     <div class="month-nav" style="margin-bottom:0">
       <button class="icon-btn" data-action="month-shift" data-n="-1" aria-label="이전 달">${IC.left}</button>
       <b style="font-size:17px">${y}년 ${mm}월</b>
@@ -513,44 +550,76 @@ function stats() {
   </section>
 
   <section class="stat-hero">
-    <p class="lbl">${mm}월 완료 매출</p>
-    <p class="big">${won(sales)}</p>
-    <p class="s">완료 ${done.length}건 · 남은 예정 ${won(planned)}</p>
+    <p class="lbl">${mm}월 매출</p>
+    <p class="big">${won(total)}</p>
+    <p class="s">청소 ${won(cleanDirect + cleanHouse)} · 주택관리 ${won(houseSales)}</p>
     <span class="b-art" aria-hidden="true">📈</span>
   </section>
-  <div class="tiles">
-    <div class="tile"><small>결제 완료</small><b class="green">${man(paid)}</b></div>
-    <div class="tile"><small>미수금</small><b class="orange">${man(sales - paid)}</b></div>
-    <div class="tile"><small>평균 소요</small><b>${avgMin ? fmtDur(avgMin) : '-'}</b></div>
+  <div class="tiles sl-tiles">
+    <div class="tile"><small>청소 · 직접 고객</small><b>${man(cleanDirect)}</b></div>
+    <div class="tile"><small>청소 · 주택관리에서</small><b>${man(cleanHouse)}</b></div>
+    <div class="tile"><small>주택관리 수리 매출</small><b class="green">${man(houseSales)}</b></div>
+    <div class="tile"><small>도매가 (원가)</small><b>${man(houseCost)}</b></div>
+    <div class="tile"><small>받을 금액</small><b class="orange">${man(unpaidAmt)}</b></div>
+    <div class="tile"><small>받은 금액</small><b class="green">${man(paidAmt)}</b></div>
   </div>
 
-  <section class="card">
-    <h3>월별 매출 <span class="right">최근 6개월</span></h3>
-    <div class="bars">${months.map((k, i) => `
-      <button class="bar-col ${k === m ? 'on' : ''}" data-action="set-month" data-m="${k}">
-        <em>${vals[i] ? man(vals[i]) : ''}</em>
-        <div class="bar-fill" style="height:${Math.round(vals[i] / max * 100)}%"></div>
-        <span>${+k.slice(5)}월</span>
-      </button>`).join('')}
-    </div>
-  </section>
+  <h2 class="sl-sec">🧾 무엇이 매출이 되었나 <small>${rows.length}건</small></h2>
+  <p class="sl-help">청소는 완료한 예약 금액 전체, 주택관리는 소비자가격에서 도매가를 뺀 금액이 매출이에요. 누르면 자세히 볼 수 있어요.</p>
+  ${rows.length ? rows.map(rowHtml).join('') : emptyBox('🫧', '이 달에는 매출이 없어요')}
 
-  ${byType.length ? `<section class="card"><h3>청소 종류별</h3>${byType.map(x => `
-    <div class="hrow"><span class="name">${x.t.emoji} ${x.t.id}</span><span class="track"><span class="fill" style="display:block;width:${Math.round(x.v / tMax * 100)}%"></span></span><span class="val">${man(x.v)}</span></div>`).join('')}
-  </section>` : ''}
-  ${byPay.length ? `<section class="card"><h3>결제 수단별</h3>${byPay.map(x => `
-    <div class="hrow"><span class="name">${x.p}</span><span class="track"><span class="fill" style="display:block;width:${Math.round(x.v / pMax * 100)}%;background:#FFB35C"></span></span><span class="val">${man(x.v)}</span></div>`).join('')}
-  </section>` : ''}
-
-  <section class="card">
-    <h3>받을 돈 (미수) <span class="right">${won(sum(unpaid))}</span></h3>
-    ${unpaid.length ? unpaid.map(j => `
-      <div class="unpaid-row">
-        <div class="who" data-go="job/${j.id}"><b>${esc(jobTitle(j))}</b><small>${dateLabel(j.date)} · ${typeOf(j.type).id}</small></div>
-        <span class="amt">${won(j.price)}</span>
-        <button class="mini-btn" data-action="quick-pay" data-id="${j.id}">받음</button>
-      </div>`).join('') : '<p style="color:var(--muted);font-weight:600">미수금이 없어요 🎉</p>'}
-  </section>`;
+  <h2 class="sl-sec">📊 그래프</h2>
+  <div class="ch-grid">
+    <section class="ch-card wide">
+      <h3>월별 매출 추이 <small>최근 6개월 · 청소와 주택관리 나눠 보기</small></h3>
+      ${svgStackedBars(months.map(k => +k.slice(5) + '월'), [
+        { name: '청소·직접', color: CHART_COLOR.direct, values: hist.map(h => h.direct) },
+        { name: '청소·주택관리', color: CHART_COLOR.house2, values: hist.map(h => h.cleanHouse) },
+        { name: '주택관리 수리', color: CHART_COLOR.house, values: hist.map(h => h.house) },
+      ])}
+      <div class="ch-legend-row">
+        <span><i style="background:${CHART_COLOR.direct}"></i>청소·직접</span>
+        <span><i style="background:${CHART_COLOR.house2}"></i>청소·주택관리</span>
+        <span><i style="background:${CHART_COLOR.house}"></i>주택관리 수리</span>
+      </div>
+    </section>
+    <section class="ch-card">
+      <h3>매출 구성</h3>
+      ${svgDonut([
+        { label: '청소 · 직접', value: cleanDirect, color: CHART_COLOR.direct },
+        { label: '청소 · 주택관리', value: cleanHouse, color: CHART_COLOR.house2 },
+        { label: '주택관리 수리', value: houseSales, color: CHART_COLOR.house },
+      ], man(total))}
+    </section>
+    <section class="ch-card">
+      <h3>받을 돈 · 받은 돈 <small>소비자가격 기준</small></h3>
+      ${svgDonut([
+        { label: '받은 금액', value: paidAmt, color: CHART_COLOR.ok },
+        { label: '받을 금액', value: unpaidAmt, color: CHART_COLOR.warn },
+      ], man(unpaidAmt))}
+    </section>
+    <section class="ch-card wide">
+      <h3>주택관리 가격 구조 <small>이번 달 수리 전체</small></h3>
+      ${priceBar(houseRetail, houseCost)}
+    </section>
+    <section class="ch-card wide">
+      <h3>건물별 매출 TOP 5</h3>
+      ${svgHBars(topBld)}
+    </section>
+    <section class="ch-card">
+      <h3>수리내용별 매출</h3>
+      ${svgHBars(byItem, CHART_COLOR.house)}
+    </section>
+    <section class="ch-card">
+      <h3>청소 종류별 매출</h3>
+      ${svgHBars(byType, CHART_COLOR.direct)}
+    </section>
+    <section class="ch-card wide">
+      <h3>결제 수단별 <small>받은 청소 매출</small></h3>
+      ${svgHBars(byPay, CHART_COLOR.ok)}
+    </section>
+  </div>
+  <div style="height:12px"></div>`;
 }
 
 /* ---------- 일정 상세 ---------- */
@@ -585,8 +654,14 @@ function jobPage(id) {
     <h1>${esc(jobTitle(j))}</h1>
     <p class="when">${dateLabel(j.date)} ${j.time}</p>
     <p class="price">${won(j.price)}</p>
-    <span class="badge ${j.done ? 'done' : ''}">${j.done ? '✓ 청소 완료' : '예정'}</span>
+    <span class="badge ${j.done ? 'done' : ''}">${j.done ? '✓ 청소 완료' : '예정'}</span>${j.source === 'housing' ? '<span class="badge job-src">🏢 주택관리에서</span>' : ''}
   </section>
+
+  ${j.phone ? `<section class="card">
+    <h3>👤 고객 연락처</h3>
+    <div class="info-row">${IC.phone}<span>${esc(j.phone)}</span></div>
+    <div class="btn-row"><a class="btn yellow" href="${telHref(j.phone)}">${IC.phone}전화 걸기</a><a class="btn" href="${smsHref(j.phone)}">${IC.msg}문자</a></div>
+  </section>` : ''}
 
   <section class="card">
     <h3>🏢 청소 장소 <button class="right" data-action="edit-job" data-id="${j.id}">수정 ›</button></h3>
@@ -761,12 +836,21 @@ function renderTypeChips(form) {
 
 function openJobForm(job = null, preset = {}) {
   const isNew = !job;
-  const j = job || { date: preset.date || today(), time: '10:00', type: db.types[0] || '기타', price: 0, customerId: preset.customerId || '', memo: '' };
+  const j = job || { date: preset.date || today(), time: '10:00', type: db.types[0] || '기타', price: 0, customerId: preset.customerId || '', memo: '', phone: '', source: preset.source || 'direct' };
+  const fromHousing = j.source === 'housing';
 
   openSheet(`
   <form class="form" id="job-form" autocomplete="off">
     <h2>${isNew ? '청소 예약 등록' : '예약 수정'}</h2>
     ${isNew ? AI_PASTE_HTML : ''}
+    <label class="f">고객 전화번호 <small class="req">필수</small>
+      <input name="phone" type="tel" inputmode="tel" placeholder="010-0000-0000" value="${esc(j.phone)}">
+    </label>
+    <p class="f-label">매출 출처</p>
+    <div class="chips src-chips">
+      <label class="chip"><input type="radio" name="source" value="direct" ${fromHousing ? '' : 'checked'}><span>👤 직접 고객</span></label>
+      <label class="chip"><input type="radio" name="source" value="housing" ${fromHousing ? 'checked' : ''}><span>🏢 주택관리에서</span></label>
+    </div>
     <div class="place">
       <p class="f-label">🏢 청소 장소</p>
       <label class="f">건물명<input name="building" placeholder="예: 래미안 아파트 / 한빛빌딩" value="${esc(j.building)}"></label>
@@ -787,17 +871,23 @@ function openJobForm(job = null, preset = {}) {
     <button class="btn yellow big" type="submit">${isNew ? '예약 등록' : '저장하기'}</button>
   </form>`, sheet => {
     const form = $('#job-form', sheet);
-    // 전에 쓴 건물명을 입력하면 지난 예약의 호수·비밀번호를 채워줌
+    // 전에 쓴 건물명을 입력하면 지난 예약의 호수·비밀번호·전화번호를 채워줌 (비어 있을 때만)
     form.building.addEventListener('change', () => {
       const last = db.jobs.filter(x => x.building && x.building === form.building.value.trim()).sort(byDateTime).pop();
-      if (last) for (const k of ['unit', 'doorPw']) if (!form[k].value) form[k].value = last[k] || '';
+      if (last) for (const k of ['unit', 'doorPw', 'phone']) if (!form[k].value) form[k].value = last[k] || '';
     });
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const f = new FormData(form);
       if ($('.type-chips', form).classList.contains('editing')) { toast('청소 종류 편집을 먼저 완료해 주세요'); return; }
-      const base = { customerId: j.customerId || '', type: f.get('type') || $('.type-chips', form).dataset.sel || '기타', date: f.get('date'), time: f.get('time'), price: toNum(f.get('price')), memo: f.get('memo').trim(),
-        building: f.get('building').trim(), unit: f.get('unit').trim(), doorPw: f.get('doorPw').trim() };
+      const phone = f.get('phone').trim();
+      if (phone.replace(/\D/g, '').length < 9) { toast('고객 전화번호를 입력해 주세요'); form.phone.focus(); return; }
+      const base = {
+        customerId: j.customerId || '', type: f.get('type') || $('.type-chips', form).dataset.sel || '기타',
+        date: f.get('date'), time: f.get('time'), price: toNum(f.get('price')), memo: f.get('memo').trim(),
+        building: f.get('building').trim(), unit: f.get('unit').trim(), doorPw: f.get('doorPw').trim(),
+        phone, source: f.get('source') === 'housing' ? 'housing' : 'direct',
+      };
       if (job) {
         Object.assign(job, base);
       } else {
@@ -914,6 +1004,7 @@ async function pullFromServer() {
   if (!res.ok) throw new Error(`서버 응답이 없어요 (${res.status}). 주소를 확인해 주세요`);
   const { items = [] } = await res.json();
   const n = { reservation: 0, complaint: 0, charge: 0, note: 0 };
+  let autoBill = 0;
   for (const it of items) {
     const kind = ['complaint', 'charge', 'note'].includes(it.kind) ? it.kind : 'reservation';
     n[kind]++;
@@ -925,19 +1016,25 @@ async function pullFromServer() {
     } else if (kind === 'charge') {
       db.repairs.push({
         id: uid(), building: it.building || '', unit: it.unit || '', phone: it.phone || '',
-        item: it.item || '', amount: it.amount || 0, date: it.date || today(), memo: it.memo || '',
-        paid: false, complaintId: null, createdAt: Date.now(),
+        item: it.item || '', amount: it.amount || 0, wholesale: it.wholesale || 0, date: it.date || today(), memo: it.memo || '',
+        paid: false, complaintId: null, source: 'housing', createdAt: Date.now(),
       });
     } else if (kind === 'note') {
-      db.housingNotes.push({
+      const note = {
         id: uid(), building: it.building || '', unit: it.unit || '', text: it.text || '',
         date: it.date || today(), source: 'ai', createdAt: Date.now(),
-      });
+      };
+      db.housingNotes.push(note);
+      if (autoBillFromNote(note)) autoBill++;
     } else {
-      if (it.type && !db.types.includes(it.type)) db.types.push(it.type);
+      // "주택관리" 종류로 들어온 예약은 주택관리 출처로 표시 (청소 종류 목록에는 넣지 않음)
+      const housing = it.source === 'housing' || it.type === '주택관리';
+      const type = it.type && it.type !== '주택관리' ? it.type : (housing ? '기타' : (db.types[0] || '기타'));
+      if (!db.types.includes(type)) db.types.push(type);
       db.jobs.push(newJob({
-        customerId: '', type: it.type || db.types[0] || '기타', date: it.date, time: it.time,
+        customerId: '', type, date: it.date, time: it.time,
         price: it.price || 0, memo: it.memo || '', building: it.building || '', unit: it.unit || '', doorPw: it.doorPw || '',
+        phone: it.phone || '', source: housing ? 'housing' : 'direct',
       }));
     }
   }
@@ -952,8 +1049,8 @@ async function pullFromServer() {
   if (n.reservation) parts.push(`예약 ${n.reservation}건`);
   if (n.complaint) parts.push(`민원 ${n.complaint}건`);
   if (n.charge) parts.push(`청구 ${n.charge}건`);
-  if (n.note) parts.push(`메모 ${n.note}건`);
-  return { msg: items.length ? `${parts.join(' · ')}을 가져왔어요` : '새로 들어온 항목이 없어요' };
+  if (n.note) parts.push(`메모 ${n.note}건${autoBill ? ` (청구 자동 등록 ${autoBill}건)` : ''}`);
+  return { n: items.length, msg: items.length ? `${parts.join(' · ')}을 가져왔어요` : '새로 들어온 항목이 없어요' };
 }
 
 
@@ -1088,7 +1185,8 @@ function memoForm(n = null, pre = {}) {
     ${housingDatalist()}
     <label class="f">건물이름<input name="building" list="hs-buildings" placeholder="예: 래미안 아파트" value="${esc(v.building)}"></label>
     <label class="f">호수<input name="unit" placeholder="예: 101동 1203호" value="${esc(v.unit)}"></label>
-    <label class="f">메모 내용<textarea name="text" rows="5" placeholder="예: 다음 달 소방 점검 예정. 관리실 열쇠 보관 중">${esc(v.text)}</textarea></label>
+    <label class="f">메모 내용<textarea name="text" rows="5" placeholder="예: 싱크대 누수 수리 80,000원 / 다음 달 소방 점검 예정">${esc(v.text)}</textarea></label>
+    <p class="cp-note">메모에 금액(예: 80,000원, 8만원)을 적으면 청구내역에 자동으로 들어가요.</p>
     <button class="btn dark big" type="submit">${n ? '저장하기' : '메모 저장'}</button>
   </form>`, sheet => {
     const form = $('#memo-form', sheet);
@@ -1097,11 +1195,16 @@ function memoForm(n = null, pre = {}) {
       const f = new FormData(form);
       const data = { building: f.get('building').trim(), unit: f.get('unit').trim(), text: f.get('text').trim() };
       if (!data.text) { toast('메모 내용을 적어 주세요'); form.text.focus(); return; }
-      if (n) Object.assign(n, data);
-      else db.housingNotes.push({ id: uid(), ...data, date: today(), source: pre.source || 'manual', createdAt: Date.now() });
+      let note = n;
+      if (note) Object.assign(note, data);
+      else {
+        note = { id: uid(), ...data, date: today(), source: pre.source || 'manual', createdAt: Date.now() };
+        db.housingNotes.push(note);
+      }
+      const bill = autoBillFromNote(note);
       save();
       await closeSheet();
-      toast(n ? '메모를 수정했어요' : '메모를 저장했어요');
+      toast(bill ? `메모 저장 · 청구내역에 ${won(bill.amount)} 자동 등록` : (n ? '메모를 수정했어요' : '메모를 저장했어요'));
       refresh();
     });
   });
@@ -1213,6 +1316,7 @@ function openHousingSearch() {
 
 // 수리비 청구
 // 청구 추가 (직접 추가 · AI 답 붙여넣기 공용)
+// 청구 추가 (수리내용 · 소비자가격 · 도매가 → 매출 = 소비자가격 − 도매가)
 function openRepairForm(pre = {}) {
   openSheet(`
   <form class="form" id="hs-rep-form" autocomplete="off">
@@ -1223,16 +1327,24 @@ function openRepairForm(pre = {}) {
       <label class="f">호수<input name="unit" placeholder="예: 101동 1203호" value="${esc(pre.unit)}"></label>
       <label class="f">전화번호<input name="phone" type="tel" inputmode="tel" placeholder="010-0000-0000" value="${esc(pre.phone)}"></label>
     </div>
-    <label class="f">수리 내용<input name="item" placeholder="예: 싱크대 누수 수리" value="${esc(pre.item)}"></label>
+    <p class="f-label">수리내용</p>
+    <div class="chips quick hs-presets">${REPAIR_PRESETS.map(p => `<button type="button" class="chip-btn" data-action="hs-item-preset" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
+    <label class="f"><input name="item" placeholder="예: 싱크대 누수 수리 (직접 적어도 돼요)" value="${esc(pre.item)}"></label>
     <div class="f-row">
-      <label class="f">청구 금액 (원)<input name="amount" inputmode="numeric" placeholder="모르면 비워 두세요" value="${pre.amount ? Number(pre.amount).toLocaleString('ko-KR') : ''}" data-money></label>
-      <label class="f">날짜<input type="date" name="date" value="${pre.date || today()}" required></label>
+      <label class="f">소비자가격 (원)<input name="amount" inputmode="numeric" placeholder="고객이 내는 금액" value="${pre.amount ? Number(pre.amount).toLocaleString('ko-KR') : ''}" data-money></label>
+      <label class="f">도매가 (원)<input name="wholesale" inputmode="numeric" placeholder="자재·원가" value="${pre.wholesale ? Number(pre.wholesale).toLocaleString('ko-KR') : ''}" data-money></label>
     </div>
     <div class="chips quick">${[30000, 50000, 80000, 100000, 150000].map(v => `<button type="button" class="chip-btn" data-action="hs-set-amount" data-v="${v}">${man(v)}</button>`).join('')}</div>
+    <p class="sale-preview">매출 = 소비자가격 − 도매가 → <b data-margin>0원</b></p>
+    <label class="f">날짜<input type="date" name="date" value="${pre.date || today()}" required></label>
     <label class="f">메모<textarea name="memo" rows="2" placeholder="특이사항">${esc(pre.memo)}</textarea></label>
     <button class="btn dark big" type="submit">청구 기록 저장</button>
   </form>`, sheet => {
     const form = $('#hs-rep-form', sheet);
+    const upd = () => { $('[data-margin]', sheet).textContent = won(toNum(form.amount.value) - toNum(form.wholesale.value)); };
+    form.amount.addEventListener('input', upd);
+    form.wholesale.addEventListener('input', upd);
+    upd();
     // 같은 건물의 지난 기록에서 호수·전화번호를 채워줌 (비어 있을 때만)
     form.building.addEventListener('change', () => {
       const b = form.building.value.trim();
@@ -1245,19 +1357,20 @@ function openRepairForm(pre = {}) {
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const f = new FormData(form);
+      const retail = toNum(f.get('amount')), cost = toNum(f.get('wholesale'));
+      if (cost > retail) { toast('도매가가 소비자가격보다 높아요. 다시 확인해 주세요'); form.wholesale.focus(); return; }
       db.repairs.push({
         id: uid(), building: f.get('building').trim(), unit: f.get('unit').trim(), phone: f.get('phone').trim(),
-        item: f.get('item').trim(), amount: toNum(f.get('amount')), date: f.get('date') || today(),
-        memo: f.get('memo').trim(), paid: false, complaintId: null, createdAt: Date.now(),
+        item: f.get('item').trim(), amount: retail, wholesale: cost, date: f.get('date') || today(),
+        memo: f.get('memo').trim(), paid: false, complaintId: null, source: 'housing', createdAt: Date.now(),
       });
       save();
       await closeSheet();
-      toast('청구를 기록했어요');
+      toast(`청구를 기록했어요 · 매출 ${won(retail - cost)}`);
       refresh();
     });
   });
 }
-
 
 // 수리 사진
 function openRepairPhotoForm() {
@@ -1431,21 +1544,24 @@ function complaintsPage() {
 
 function billCard(r, focusId) {
   const paid = !!r.paid;
+  const cost = r.wholesale || 0;
+  const from = r.complaintId ? '민원 처리' : r.noteId ? '메모 자동 등록' : '직접 청구';
   return `
   <article class="bill ${paid ? 'is-paid' : ''}">
     <div class="bill-top">
       <div class="bill-place">
         <b>${esc(placeOf(r) || '장소 미정')}</b>
-        <small>${dateLabel(r.date)} · ${r.complaintId ? '민원 처리' : '직접 청구'}</small>
+        <small>${dateLabel(r.date)} · ${from}</small>
       </div>
       <span class="cp-tag ${paid ? 'done' : ''}">${paid ? '받음' : '미수'}</span>
     </div>
     ${r.item ? `<p class="bill-item">${esc(r.item)}</p>` : ''}
     ${r.phone ? `<a class="cp-phone" href="${telHref(r.phone)}">📞 ${esc(r.phone)}</a>` : ''}
-    <div class="bill-amt">
-      <input class="bill-input" inputmode="numeric" placeholder="금액 입력" value="${r.amount ? r.amount.toLocaleString('ko-KR') : ''}" data-money ${focusId === r.id ? 'data-autofocus' : ''}>
-      <span>원</span>
-      <button class="hs-mini" data-action="bill-save" data-id="${r.id}">금액 저장</button>
+    <div class="bill-money"><span>소비자가격 ${won(r.amount)}</span><span>도매가 ${won(cost)}</span><b>매출 ${won((r.amount || 0) - cost)}</b></div>
+    <div class="bill-amt bill-amt2">
+      <label><small>소비자가격</small><input class="bill-input" inputmode="numeric" placeholder="0" value="${r.amount ? r.amount.toLocaleString('ko-KR') : ''}" data-money ${focusId === r.id ? 'data-autofocus' : ''}></label>
+      <label><small>도매가</small><input class="bill-wholesale" inputmode="numeric" placeholder="0" value="${cost ? cost.toLocaleString('ko-KR') : ''}" data-money></label>
+      <button class="hs-mini" data-action="bill-save" data-id="${r.id}">저장</button>
     </div>
     <div class="cp-btns">
       <button class="hs-mini ghost" data-action="hs-toggle-paid" data-id="${r.id}">${paid ? '받음 취소' : '받음 표시'}</button>
@@ -1457,19 +1573,20 @@ function billCard(r, focusId) {
 
 function billingPage(focusId) {
   const list = [...db.repairs].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  const total = repairAmount(list);
-  const paid = repairAmount(list.filter(r => r.paid));
+  const retail = sumBy(list, r => r.amount), cost = sumBy(list, r => r.wholesale);
+  const unpaid = sumBy(list.filter(r => !r.paid), r => r.amount);
   return `
   <header class="bar"><button class="icon-btn" data-action="back" aria-label="뒤로">${IC.back}</button><h2>청구내역</h2></header>
   <section class="cp-head">
-    <div><small>총 청구</small><b>${won(total)}</b></div>
-    <div><small>받은 금액</small><b>${won(paid)}</b></div>
-    <div><small>받을 금액</small><b class="warn">${won(total - paid)}</b></div>
+    <div><small>소비자가격 합계</small><b>${won(retail)}</b></div>
+    <div><small>도매가 합계</small><b>${won(cost)}</b></div>
+    <div><small>매출 (마진)</small><b class="ok">${won(retail - cost)}</b></div>
   </section>
-  <div class="bill-add"><button class="cp-new" data-action="hs-repair">＋ 직접 청구 추가</button></div>
+  <p class="cp-note bill-help">받을 금액 ${won(unpaid)} · 소비자가격에서 도매가를 뺀 금액이 매출로 잡혀요.</p>
+  <div class="bill-add"><button class="cp-new" data-action="hs-repair">＋ 청구 추가 (수리내용 · 도매가)</button></div>
   ${list.length
     ? list.map(r => billCard(r, focusId)).join('')
-    : emptyBox('🧾', '청구 내역이 없어요', '<p class="cp-note">민원을 처리 완료하면 여기에 자동으로 나와요</p>')}
+    : emptyBox('🧾', '청구 내역이 없어요', '<p class="cp-note">민원을 처리 완료하거나, 메모에 금액을 적으면 여기에 자동으로 나와요</p>')}
   <div style="height:10px"></div>`;
 }
 
@@ -1483,25 +1600,35 @@ function billForm(r) {
       <label class="f">호수<input name="unit" value="${esc(r.unit)}"></label>
       <label class="f">전화번호<input name="phone" type="tel" inputmode="tel" value="${esc(r.phone)}"></label>
     </div>
-    <label class="f">고장 · 수리 내용<textarea name="item" rows="3">${esc(r.item)}</textarea></label>
+    <p class="f-label">수리내용</p>
+    <div class="chips quick hs-presets">${REPAIR_PRESETS.map(p => `<button type="button" class="chip-btn" data-action="hs-item-preset" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
+    <label class="f"><textarea name="item" rows="2">${esc(r.item)}</textarea></label>
     <div class="f-row">
-      <label class="f">청구 금액 (원)<input name="amount" inputmode="numeric" value="${r.amount ? r.amount.toLocaleString('ko-KR') : ''}" data-money></label>
-      <label class="f">날짜<input type="date" name="date" value="${r.date || today()}"></label>
+      <label class="f">소비자가격 (원)<input name="amount" inputmode="numeric" value="${r.amount ? r.amount.toLocaleString('ko-KR') : ''}" data-money></label>
+      <label class="f">도매가 (원)<input name="wholesale" inputmode="numeric" value="${r.wholesale ? r.wholesale.toLocaleString('ko-KR') : ''}" data-money></label>
     </div>
+    <p class="sale-preview">매출 = 소비자가격 − 도매가 → <b data-margin>0원</b></p>
+    <label class="f">날짜<input type="date" name="date" value="${r.date || today()}"></label>
     <label class="f">메모<input name="memo" value="${esc(r.memo)}"></label>
     <button class="btn dark big" type="submit">저장하기</button>
   </form>`, sheet => {
     const form = $('#bill-form', sheet);
+    const upd = () => { $('[data-margin]', sheet).textContent = won(toNum(form.amount.value) - toNum(form.wholesale.value)); };
+    form.amount.addEventListener('input', upd);
+    form.wholesale.addEventListener('input', upd);
+    upd();
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const f = new FormData(form);
+      const retail = toNum(f.get('amount')), cost = toNum(f.get('wholesale'));
+      if (cost > retail) { toast('도매가가 소비자가격보다 높아요. 다시 확인해 주세요'); form.wholesale.focus(); return; }
       Object.assign(r, {
         building: f.get('building').trim(), unit: f.get('unit').trim(), phone: f.get('phone').trim(),
-        item: f.get('item').trim(), amount: toNum(f.get('amount')), date: f.get('date') || r.date, memo: f.get('memo').trim(),
+        item: f.get('item').trim(), amount: retail, wholesale: cost, date: f.get('date') || r.date, memo: f.get('memo').trim(),
       });
       save();
       await closeSheet();
-      toast('수정했어요');
+      toast(`수정했어요 · 매출 ${won(retail - cost)}`);
       refresh();
     });
   });
@@ -1514,6 +1641,120 @@ document.addEventListener('keydown', e => {
     e.target.closest('.bill')?.querySelector('[data-action=bill-save]')?.click();
   }
 });
+
+
+/* ---------- 매출 · 청구 · 그래프 공용 ---------- */
+const CHART_COLOR = { direct: '#FFB84D', house: '#2F6E8F', house2: '#8E6CF0', cost: '#C9D6E3', ok: '#13875A', warn: '#E0612B' };
+const REPAIR_PRESETS = ['수도·누수', '싱크대', '변기', '보일러', '배관', '전기', '도배·장판', '방충망', '에어컨', '욕실', '기타 수리'];
+// 문장 속 전화번호 찾기 (010-1234-5678, 02-333-4444 등)
+const findPhone = s => (String(s || '').match(/0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}/) || [''])[0].replace(/\s/g, '');
+const sumBy = (arr, f) => arr.reduce((a, x) => a + (f(x) || 0), 0);
+
+// 매출이 된 항목 한눈에: 청소(완료 예약 금액 전체) + 주택관리 수리(소비자가격 − 도매가)
+function salesRows(m) {
+  const rows = [];
+  for (const j of db.jobs) {
+    if (!j.done || !(j.date || '').startsWith(m)) continue;
+    rows.push({
+      kind: 'clean', src: j.source === 'housing' ? 'housing' : 'direct', id: j.id, date: j.date || '',
+      bld: j.building || '', place: placeOf(j) || jobTitle(j), what: typeOf(j.type).id,
+      retail: j.price || 0, wholesale: 0, sales: j.price || 0, paid: !!j.paid, pay: j.payMethod || '',
+    });
+  }
+  for (const r of db.repairs) {
+    if (!(r.date || '').startsWith(m)) continue;
+    const cost = r.wholesale || 0;
+    rows.push({
+      kind: 'housing', src: 'housing', id: r.id, date: r.date || '',
+      bld: r.building || '', place: placeOf(r) || '장소 미정', what: r.item || '수리',
+      retail: r.amount || 0, wholesale: cost, sales: (r.amount || 0) - cost, paid: !!r.paid, pay: '',
+    });
+  }
+  return rows.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// 메모에 금액(예: 80,000원, 8만원)이 적혀 있으면 청구내역에 자동으로 넣어요
+function autoBillFromNote(n) {
+  const amt = parsePrice(n.text);
+  if (!amt) return null;
+  const linked = n.repairId && db.repairs.find(x => x.id === n.repairId);
+  if (linked) { linked.amount = amt; if (!linked.item) linked.item = n.text; return linked; }
+  const rec = {
+    id: uid(), building: n.building || '', unit: n.unit || '', phone: '', item: n.text,
+    amount: amt, wholesale: 0, date: n.date || today(), memo: '메모에서 자동 등록',
+    paid: false, complaintId: null, noteId: n.id, source: 'housing', createdAt: Date.now(),
+  };
+  db.repairs.push(rec);
+  n.repairId = rec.id;
+  return rec;
+}
+
+// 그래프 (외부 라이브러리 없이 SVG로 그림 → 휴대폰에서도 바로 보임)
+function svgStackedBars(labels, series) {
+  const W = 340, H = 200, top = 22, base = H - 26, pad = 12;
+  const totals = labels.map((_, i) => series.reduce((a, s) => a + (s.values[i] || 0), 0));
+  const max = Math.max(...totals, 1);
+  const bw = (W - pad * 2) / labels.length;
+  let g = '';
+  labels.forEach((lab, i) => {
+    const x = pad + i * bw + bw * 0.18, w = bw * 0.64;
+    let y = base;
+    for (const s of series) {
+      const v = s.values[i] || 0;
+      const h = (v / max) * (base - top);
+      if (h > 0) {
+        y -= h;
+        g += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" fill="${s.color}"><title>${esc(s.name)} ${won(v)}</title></rect>`;
+      }
+    }
+    g += `<text x="${x + w / 2}" y="${H - 8}" text-anchor="middle" class="ch-lab">${esc(lab)}</text>`;
+    if (totals[i]) g += `<text x="${x + w / 2}" y="${base - (totals[i] / max) * (base - top) - 6}" text-anchor="middle" class="ch-val">${man(totals[i])}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" class="ch-svg" role="img" aria-label="월별 매출">${g}</svg>`;
+}
+
+function svgDonut(parts, center) {
+  const total = sumBy(parts, p => p.value);
+  const R = 50, C = 2 * Math.PI * R;
+  let off = 0;
+  let g = `<circle cx="70" cy="70" r="${R}" fill="none" stroke="#EEF2F6" stroke-width="20"/>`;
+  if (total) {
+    for (const p of parts) {
+      if (!p.value) continue;
+      const len = p.value / total * C;
+      g += `<circle cx="70" cy="70" r="${R}" fill="none" stroke="${p.color}" stroke-width="20" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)"><title>${esc(p.label)} ${won(p.value)}</title></circle>`;
+      off += len;
+    }
+  }
+  return `<div class="ch-donut">
+    <svg viewBox="0 0 140 140" class="ch-svg" role="img" aria-label="${esc(center)}">${g}
+      <text x="70" y="68" text-anchor="middle" class="ch-c1">${esc(center)}</text>
+      <text x="70" y="86" text-anchor="middle" class="ch-c2">${total ? '' : '자료 없음'}</text>
+    </svg>
+    <ul class="ch-legend">${parts.map(p => `<li><i style="background:${p.color}"></i><span>${esc(p.label)}</span><b>${total ? Math.round(p.value / total * 100) : 0}%</b></li>`).join('')}</ul>
+  </div>`;
+}
+
+function svgHBars(items, color = CHART_COLOR.house) {
+  if (!items.length) return '<p class="cp-note">자료가 없어요</p>';
+  const max = Math.max(...items.map(x => x.value), 1);
+  return `<div class="ch-hbars">${items.map(x => `
+    <div class="ch-hrow">
+      <span class="ch-hname" title="${esc(x.label)}">${esc(x.label)}</span>
+      <span class="ch-htrack"><span class="ch-hfill" style="width:${Math.max(4, Math.round(x.value / max * 100))}%;background:${x.color || color}"></span></span>
+      <b class="ch-hval">${man(x.value)}</b>
+    </div>`).join('')}</div>`;
+}
+
+// 주택관리 가격 구조: 소비자가격 = 도매가 + 매출
+function priceBar(retail, cost) {
+  const margin = retail - cost, t = retail || 1;
+  return `<div class="ch-price">
+    <div class="ch-pbar"><span style="width:${Math.round(cost / t * 100)}%;background:${CHART_COLOR.cost}"></span><span style="width:${Math.max(0, Math.round(margin / t * 100))}%;background:${CHART_COLOR.house}"></span></div>
+    <div class="ch-plegend"><span><i style="background:${CHART_COLOR.cost}"></i>도매가 ${won(cost)}</span><span><i style="background:${CHART_COLOR.house}"></i>매출 ${won(margin)}</span></div>
+    <p class="cp-note">소비자가격 ${won(retail)} = 도매가 + 매출</p>
+  </div>`;
+}
 
 /* ---------- 샘플 / 백업 ---------- */
 function loadSample() {
@@ -1656,7 +1897,11 @@ const actions = {
   'hs-photo': () => openRepairPhotoForm(),
   'hs-sms': () => openHousingSms(),
   'hs-open'(el) { closeSheet().then(() => go(el.dataset.go)); },
-  'hs-set-amount'(el) { el.closest('form').amount.value = (+el.dataset.v).toLocaleString('ko-KR'); },
+  'hs-set-amount'(el) {
+    const f = el.closest('form');
+    f.amount.value = (+el.dataset.v).toLocaleString('ko-KR');
+    f.amount.dispatchEvent(new Event('input', { bubbles: true }));
+  },
   'hs-tpl'(el) {
     const form = el.closest('form');
     const place = [form.building.value.trim(), form.unit.value.trim()].filter(Boolean).join(' ') || '해당 장소';
@@ -1722,11 +1967,14 @@ const actions = {
   'bill-save'(el) {
     const r = db.repairs.find(x => x.id === el.dataset.id);
     if (!r) return;
-    const v = toNum(el.closest('.bill').querySelector('.bill-input').value);
-    r.amount = v;
+    const card = el.closest('.bill');
+    const retail = toNum(card.querySelector('.bill-input').value);
+    const cost = toNum(card.querySelector('.bill-wholesale').value);
+    if (cost > retail) { toast('도매가가 소비자가격보다 높아요'); return; }
+    Object.assign(r, { amount: retail, wholesale: cost });
     save();
     refresh();
-    toast(v ? `${won(v)}으로 저장했어요` : '금액을 비웠어요');
+    toast(retail ? `저장했어요 · 매출 ${won(retail - cost)}` : '금액을 비웠어요');
   },
   'bill-edit'(el) {
     const r = db.repairs.find(x => x.id === el.dataset.id);
@@ -1765,10 +2013,21 @@ const actions = {
   'memo-delete'(el) {
     const n = db.housingNotes.find(x => x.id === el.dataset.id);
     if (!n || !confirm('이 메모를 삭제할까요?')) return;
+    const linked = n.repairId && db.repairs.find(x => x.id === n.repairId);
+    if (linked && confirm('이 메모로 자동 등록된 청구내역도 함께 지울까요?')) db.repairs = db.repairs.filter(x => x !== linked);
     db.housingNotes = db.housingNotes.filter(x => x !== n);
     save();
     refresh();
     toast('메모를 삭제했어요');
+  },
+  'hs-item-preset'(el) {
+    const f = el.closest('form');
+    f.item.value = el.dataset.v;
+    f.item.focus();
+  },
+  'sales-open'(el) {
+    if (el.dataset.kind === 'clean') go('job/' + el.dataset.id);
+    else go('billing');
   },
   'toggle-pw'(el) { el.classList.toggle('on'); },
   'edit-types'(el) {
@@ -1959,8 +2218,8 @@ async function autoPull() {
   if (autoPulling || !syncUrl().trim()) return;
   autoPulling = true;
   try {
-    const n = await pullFromServer();
-    if (n) { toast(`AI가 넣은 예약 ${n}건을 가져왔어요`); refresh(); }
+    const r = await pullFromServer();
+    if (r.n) { toast(r.msg); refresh(); }
   } catch { /* 인터넷이 없을 때는 조용히 넘어가요. 설정의 “예약 가져오기”로 다시 할 수 있어요 */ }
   finally { autoPulling = false; }
 }

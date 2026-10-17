@@ -15,10 +15,12 @@ const MAX_ITEMS = 200;
 const TOOLS = [
   {
     name: 'add_reservation',
-    description: '청소 예약을 보관함에 넣습니다. 사용자가 휴대폰 청소노트에서 "서버에서 가져오기"를 누르면 예약으로 옮겨집니다. 날짜와 시간은 꼭 필요합니다.',
+    description: '청소 예약을 보관함에 넣습니다. 사용자가 휴대폰 청소노트에서 "서버에서 가져오기"를 누르면 예약으로 옮겨집니다. 날짜·시간·고객 전화번호는 꼭 필요합니다. 주택관리 건물에서 나온 청소면 source를 housing으로 넣으세요.',
     inputSchema: {
       type: 'object',
       properties: {
+        phone: { type: 'string', description: '고객 전화번호 (필수). 예: 010-1234-5678' },
+        source: { type: 'string', enum: ['direct', 'housing'], description: '매출 출처. 직접 고객이면 direct, 주택관리 건물에서 나온 청소면 housing' },
         building: { type: 'string', description: '건물명. 예: 래미안 아파트' },
         unit: { type: 'string', description: '호수. 예: 101동 1203호' },
         doorPw: { type: 'string', description: '출입 비밀번호. 예: 1234*' },
@@ -28,7 +30,7 @@ const TOOLS = [
         type: { type: 'string', description: '청소 종류. 예: 입주청소, 이사청소, 에어컨청소, 기타' },
         memo: { type: 'string', description: '메모' },
       },
-      required: ['date', 'time'],
+      required: ['date', 'time', 'phone'],
     },
   },
   {
@@ -55,7 +57,8 @@ const TOOLS = [
         unit: { type: 'string', description: '호수. 예: 101동 1203호' },
         phone: { type: 'string', description: '연락처. 예: 010-1234-5678' },
         item: { type: 'string', description: '수리 내용. 예: 싱크대 누수 수리' },
-        amount: { type: 'number', description: '청구 금액(원). 예: 80000' },
+        amount: { type: 'number', description: '소비자가격 = 청구 금액(원). 예: 80000' },
+        wholesale: { type: 'number', description: '도매가(재료·원가, 원). 매출 = 소비자가격 - 도매가. 모르면 생략' },
         date: { type: 'string', description: '날짜 YYYY-MM-DD. 생략하면 오늘' },
         memo: { type: 'string', description: '메모' },
       },
@@ -93,8 +96,12 @@ function cleanReservation(a) {
   const time = clip(a.time, 5);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('날짜는 YYYY-MM-DD 형식이어야 해요. 예: 2026-10-20');
   if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('시간은 HH:MM 형식이어야 해요. 예: 14:00');
+  const phone = clip(a.phone, 30);
+  if (phone.replace(/\D/g, '').length < 9) throw new Error('고객 전화번호(phone)를 꼭 넣어 주세요. 예: 010-1234-5678');
   return {
     kind: 'reservation',
+    phone,
+    source: a.source === 'housing' ? 'housing' : 'direct',
     building: clip(a.building, 60),
     unit: clip(a.unit, 40),
     doorPw: clip(a.doorPw, 30),
@@ -131,6 +138,7 @@ function cleanCharge(a) {
     phone: clip(a.phone, 30),
     item,
     amount: money(a.amount),
+    wholesale: money(a.wholesale),
     date: validDate(a.date),
     memo: clip(a.memo, 300),
     createdAt: new Date().toISOString(),

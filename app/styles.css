@@ -534,3 +534,71 @@ body.detail #tabbar { display: none; }
 .hs-tags { margin-bottom: 10px; }
 #hs-paste-text { width: 100%; padding: 14px; border: 1.5px solid #E1E8F0; border-radius: 16px; background: #F7F9FC; font: inherit; font-size: 16px; resize: none; outline: none; margin-bottom: 14px; }
 #hs-paste-text:focus { border-color: #5B5BD6; background: #fff; }
+
+/* ---------- 고객 전화번호 · 매출 출처 · 청구(도매가) · 매출 그래프 ---------- */
+.req { font-size: 11.5px; font-weight: 800; color: #E0612B; margin-left: 4px; }
+.src-chips { margin-bottom: 14px; }
+.resv-call { display: inline-block; margin: 0 0 10px; font-size: 13px; font-weight: 800; color: #2F6E8F; }
+.badge.job-src { margin-left: 6px; background: #DDEEF5; color: #1F5F7C; }
+.sale-preview { margin: 4px 2px 12px; font-size: 13px; color: #33475B; font-weight: 700; }
+.sale-preview b { color: #13875A; font-size: 15px; font-variant-numeric: tabular-nums; }
+.hs-presets { margin-bottom: 8px; }
+.cp-head b.ok { color: #13875A; }
+.bill-help { margin: 8px 16px 0; }
+.bill-money { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 10px; font-size: 12px; color: #7A8CA3; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bill-money b { color: #13875A; }
+.bill-amt2 { align-items: flex-end; flex-wrap: wrap; }
+.bill-amt2 label { flex: 1; min-width: 92px; display: grid; gap: 4px; }
+.bill-amt2 label small { font-size: 11px; color: #7A8CA3; font-weight: 700; }
+.bill-amt2 .bill-input, .bill-amt2 .bill-wholesale { width: 100%; height: 44px; padding: 0 12px; border: 1.5px solid #E1E8F0; border-radius: 14px; background: #F7F9FC; font-size: 15px; font-weight: 800; text-align: right; color: #1F3A5F; outline: none; }
+.bill-amt2 .bill-input:focus, .bill-amt2 .bill-wholesale:focus { border-color: #2F6E8F; background: #fff; }
+.bill-amt2 .hs-mini { height: 44px; }
+
+.sl-tiles { grid-template-columns: repeat(3, 1fr); }
+.sl-tiles .tile b { font-size: 14.5px; }
+.sl-sec { display: flex; align-items: baseline; gap: 8px; margin: 22px 16px 8px; font-size: 17px; font-weight: 800; color: #1F3A5F; }
+.sl-sec small { font-size: 12.5px; color: #7A8CA3; font-weight: 700; }
+.sl-help { margin: 0 16px 10px; font-size: 12.5px; line-height: 1.5; color: #7A8CA3; font-weight: 600; }
+.sl-row { display: flex; align-items: center; gap: 10px; margin: 0 16px 10px; padding: 14px 14px 14px 16px; background: #fff; border-radius: 20px; box-shadow: 0 2px 10px rgba(31, 58, 95, .05); }
+.sl-row.is-paid { opacity: .8; }
+.sl-main { flex: 1; min-width: 0; cursor: pointer; }
+.sl-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.sl-badge { font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.sl-badge.cl { background: #FFF1DA; color: #B86A00; }
+.sl-badge.hs { background: #DDEEF5; color: #1F5F7C; }
+.sl-date { font-size: 12px; color: #7A8CA3; font-weight: 700; }
+.sl-place { display: block; margin-top: 8px; font-size: 15.5px; font-weight: 800; color: #1F3A5F; }
+.sl-what { margin-top: 2px; font-size: 13px; color: #33475B; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sl-nums { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 8px; font-size: 12px; color: #7A8CA3; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sl-nums strong { margin-left: auto; color: #13875A; font-size: 13.5px; }
+.sl-side { flex: none; }
+.sl-paid { font-size: 12px; font-weight: 800; color: #13875A; }
+
+.ch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 16px; }
+.ch-card { min-width: 0; padding: 14px; background: #fff; border-radius: 20px; box-shadow: 0 2px 10px rgba(31, 58, 95, .05); }
+.ch-card.wide { grid-column: 1 / -1; }
+.ch-card h3 { margin-bottom: 8px; font-size: 14px; font-weight: 800; color: #1F3A5F; }
+.ch-card h3 small { display: block; margin-top: 2px; font-size: 11.5px; color: #7A8CA3; font-weight: 700; }
+.ch-svg { display: block; width: 100%; height: auto; }
+.ch-lab { font-size: 11px; fill: #7A8CA3; font-weight: 700; }
+.ch-val { font-size: 10.5px; fill: #1F3A5F; font-weight: 800; }
+.ch-c1 { font-size: 14px; font-weight: 800; fill: #1F3A5F; }
+.ch-c2 { font-size: 10px; fill: #7A8CA3; font-weight: 700; }
+.ch-donut { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.ch-donut .ch-svg { width: 118px; }
+.ch-legend { display: grid; gap: 4px; width: 100%; margin: 0; padding: 0; list-style: none; }
+.ch-legend li { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #33475B; font-weight: 700; }
+.ch-legend li span { flex: 1; min-width: 0; }
+.ch-legend li b { color: #1F3A5F; font-variant-numeric: tabular-nums; }
+.ch-legend i, .ch-legend-row i, .ch-plegend i { display: inline-block; width: 9px; height: 9px; margin-right: 3px; border-radius: 3px; }
+.ch-legend-row { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 11.5px; color: #33475B; font-weight: 700; }
+.ch-hbars { display: grid; gap: 8px; }
+.ch-hrow { display: grid; grid-template-columns: 76px 1fr 56px; align-items: center; gap: 8px; font-size: 12px; }
+.ch-hname { font-weight: 700; color: #33475B; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-htrack { display: block; height: 10px; overflow: hidden; background: #EEF2F6; border-radius: 99px; }
+.ch-hfill { display: block; height: 100%; border-radius: 99px; }
+.ch-hval { text-align: right; color: #1F3A5F; font-variant-numeric: tabular-nums; }
+.ch-price { display: grid; gap: 8px; }
+.ch-pbar { display: flex; height: 22px; overflow: hidden; background: #EEF2F6; border-radius: 10px; }
+.ch-pbar span { display: block; height: 100%; }
+.ch-plegend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; font-weight: 700; color: #33475B; }

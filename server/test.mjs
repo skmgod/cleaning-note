@@ -27,13 +27,16 @@ j = await (await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).json();
 assert.deepEqual(j.result.tools.map(t => t.name), ['add_reservation', 'add_complaint', 'add_repair_charge', 'add_housing_memo', 'list_pending']);
 
 // 3) 예약 넣기
-j = await tool(3, 'add_reservation', { building: '래미안 아파트', unit: '101동 1203호', doorPw: '1234', date: '2026-10-20', time: '14:00', price: 150000, type: '입주청소' });
+j = await tool(3, 'add_reservation', { building: '래미안 아파트', unit: '101동 1203호', doorPw: '1234', date: '2026-10-20', time: '14:00', price: 150000, type: '입주청소', phone: '010-1234-5678', source: 'housing' });
 assert.ok(!j.result.isError, j.result.content[0].text);
 assert.match(j.result.content[0].text, /예약을 보관함에 넣었어요/);
 
-// 4) 잘못된 날짜는 거절
-j = await tool(4, 'add_reservation', { date: '내일', time: '14:00' });
+// 4) 잘못된 날짜, 전화번호 없는 예약은 거절
+j = await tool(4, 'add_reservation', { date: '내일', time: '14:00', phone: '010-1234-5678' });
 assert.equal(j.result.isError, true);
+j = await tool(41, 'add_reservation', { date: '2026-10-20', time: '14:00' });
+assert.equal(j.result.isError, true);
+assert.match(j.result.content[0].text, /전화번호/);
 
 // 5) 민원 접수
 j = await tool(5, 'add_complaint', { building: '래미안 아파트', unit: '101동 1203호', phone: '010-1234-5678', content: '화장실 변기 물이 안 내려감' });
@@ -45,7 +48,7 @@ j = await tool(6, 'add_complaint', { building: '래미안 아파트' });
 assert.equal(j.result.isError, true);
 
 // 7) 수리비 청구 (금액은 "80,000원" 같은 글자도 허용, 날짜 생략하면 오늘)
-j = await tool(7, 'add_repair_charge', { building: '래미안 아파트', unit: '101동 1203호', item: '싱크대 누수 수리', amount: '80,000원' });
+j = await tool(7, 'add_repair_charge', { building: '래미안 아파트', unit: '101동 1203호', item: '싱크대 누수 수리', amount: '80,000원', wholesale: 30000 });
 assert.ok(!j.result.isError, j.result.content[0].text);
 
 // 8) 주택관리 메모
@@ -57,9 +60,12 @@ let inbox = await (await call('/inbox/test-secret-123', { method: 'GET' })).json
 assert.deepEqual(inbox.items.map(x => x.kind).sort(), ['charge', 'complaint', 'note', 'reservation']);
 const charge = inbox.items.find(x => x.kind === 'charge');
 assert.equal(charge.amount, 80000);
+assert.equal(charge.wholesale, 30000);
 assert.match(charge.date, /^\d{4}-\d{2}-\d{2}$/);
 const reservation = inbox.items.find(x => x.kind === 'reservation');
 assert.equal(reservation.price, 150000);
+assert.equal(reservation.phone, '010-1234-5678');
+assert.equal(reservation.source, 'housing');
 
 // 10) 목록 보기 도구
 j = await tool(10, 'list_pending', {});
@@ -74,4 +80,4 @@ assert.equal(inbox.items.length, 0);
 const pre = await call('/inbox/test-secret-123', { method: 'OPTIONS' });
 assert.equal(pre.headers.get('Access-Control-Allow-Origin'), '*');
 
-console.log('✅ 서버 테스트 모두 통과 (12/12)');
+console.log('✅ 서버 테스트 모두 통과 (13/13)');
