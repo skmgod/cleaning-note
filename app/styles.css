@@ -602,3 +602,21 @@ body.detail #tabbar { display: none; }
 .ch-pbar { display: flex; height: 22px; overflow: hidden; background: #EEF2F6; border-radius: 10px; }
 .ch-pbar span { display: block; height: 100%; }
 .ch-plegend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; font-weight: 700; color: #33475B; }
+
+/* ---------- 청구 항목 여러 줄 ---------- */
+.rep-hint { margin-left: 6px; font-size: 11.5px; font-weight: 700; color: #7A8CA3; }
+.rep-lines { display: grid; gap: 10px; margin: 4px 0 10px; }
+.rep-line { padding: 12px 12px 2px; background: #F7F9FC; border: 1.5px solid #E1E8F0; border-radius: 18px; }
+.rep-line-top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.rep-no { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: #1F3A5F; color: #fff; font-size: 12.5px; font-weight: 800; }
+.rep-line-top .rl-item { flex: 1; min-width: 0; height: 42px; padding: 0 12px; border: 1.5px solid #E1E8F0; border-radius: 12px; background: #fff; font-size: 15px; font-weight: 700; color: #1F3A5F; outline: none; }
+.rep-line-top .rl-item:focus { border-color: #2F6E8F; }
+.rep-del { flex: none; width: 34px; height: 34px; border: 0; border-radius: 50%; background: #FDE9E2; color: #E0612B; font-size: 20px; font-weight: 800; line-height: 1; cursor: pointer; }
+.rep-line .f-row .f input { background: #fff; }
+.rep-add { width: 100%; height: 46px; margin-bottom: 10px; border: 1.5px dashed #2F6E8F; border-radius: 14px; background: #EEF6FA; color: #1F5F7C; font-size: 14.5px; font-weight: 800; cursor: pointer; }
+.bill-lines { display: grid; gap: 6px; margin: 8px 0 2px; padding: 0; list-style: none; }
+.bill-lines li { display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; color: #33475B; font-weight: 700; }
+.bill-lines li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bill-lines li small { color: #7A8CA3; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.bill-lines li b { color: #13875A; font-size: 13px; font-variant-numeric: tabular-nums; }
+.bill-multi { margin: 8px 0 0; }

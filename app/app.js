@@ -3,6 +3,7 @@
  * 데이터: localStorage(일정/고객), IndexedDB(사진) — 모두 휴대폰 안에만 저장됩니다. */
 
 const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const KEY = 'cleannote.v1';
 
 // 기본 청소 종류 (앱에서 추가 · 이름변경 · 삭제 가능 → db.types)
@@ -519,7 +520,7 @@ function stats() {
     return Object.entries(map).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
   };
   const topBld = group(rows, r => r.bld || r.place).slice(0, 5);
-  const byItem = group(houseRows, r => r.what).slice(0, 6);
+  const byItem = group(houseRows.flatMap(r => r.parts || [r]), r => r.what).slice(0, 6);
   const byType = group(rows.filter(isClean), r => r.what).slice(0, 6);
   const byPay = PAY.map(p => ({ label: p, value: sumBy(rows.filter(r => r.paid && r.pay === p), r => r.sales) })).filter(x => x.value);
 
@@ -1327,24 +1328,13 @@ function openRepairForm(pre = {}) {
       <label class="f">호수<input name="unit" placeholder="예: 101동 1203호" value="${esc(pre.unit)}"></label>
       <label class="f">전화번호<input name="phone" type="tel" inputmode="tel" placeholder="010-0000-0000" value="${esc(pre.phone)}"></label>
     </div>
-    <p class="f-label">수리내용</p>
-    <div class="chips quick hs-presets">${REPAIR_PRESETS.map(p => `<button type="button" class="chip-btn" data-action="hs-item-preset" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
-    <label class="f"><input name="item" placeholder="예: 싱크대 누수 수리 (직접 적어도 돼요)" value="${esc(pre.item)}"></label>
-    <div class="f-row">
-      <label class="f">소비자가격 (원)<input name="amount" inputmode="numeric" placeholder="고객이 내는 금액" value="${pre.amount ? Number(pre.amount).toLocaleString('ko-KR') : ''}" data-money></label>
-      <label class="f">도매가 (원)<input name="wholesale" inputmode="numeric" placeholder="자재·원가" value="${pre.wholesale ? Number(pre.wholesale).toLocaleString('ko-KR') : ''}" data-money></label>
-    </div>
-    <div class="chips quick">${[30000, 50000, 80000, 100000, 150000].map(v => `<button type="button" class="chip-btn" data-action="hs-set-amount" data-v="${v}">${man(v)}</button>`).join('')}</div>
-    <p class="sale-preview">매출 = 소비자가격 − 도매가 → <b data-margin>0원</b></p>
+    ${repLinesEditor(repLinesOf(pre))}
     <label class="f">날짜<input type="date" name="date" value="${pre.date || today()}" required></label>
     <label class="f">메모<textarea name="memo" rows="2" placeholder="특이사항">${esc(pre.memo)}</textarea></label>
     <button class="btn dark big" type="submit">청구 기록 저장</button>
   </form>`, sheet => {
     const form = $('#hs-rep-form', sheet);
-    const upd = () => { $('[data-margin]', sheet).textContent = won(toNum(form.amount.value) - toNum(form.wholesale.value)); };
-    form.amount.addEventListener('input', upd);
-    form.wholesale.addEventListener('input', upd);
-    upd();
+    repBind(form);
     // 같은 건물의 지난 기록에서 호수·전화번호를 채워줌 (비어 있을 때만)
     form.building.addEventListener('change', () => {
       const b = form.building.value.trim();
@@ -1357,16 +1347,17 @@ function openRepairForm(pre = {}) {
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const f = new FormData(form);
-      const retail = toNum(f.get('amount')), cost = toNum(f.get('wholesale'));
-      if (cost > retail) { toast('도매가가 소비자가격보다 높아요. 다시 확인해 주세요'); form.wholesale.focus(); return; }
-      db.repairs.push({
+      const t = repRead(form);
+      if (!t) return;
+      const rec = {
         id: uid(), building: f.get('building').trim(), unit: f.get('unit').trim(), phone: f.get('phone').trim(),
-        item: f.get('item').trim(), amount: retail, wholesale: cost, date: f.get('date') || today(),
-        memo: f.get('memo').trim(), paid: false, complaintId: null, source: 'housing', createdAt: Date.now(),
-      });
+        date: f.get('date') || today(), memo: f.get('memo').trim(), paid: false, complaintId: null, source: 'housing', createdAt: Date.now(),
+      };
+      repApply(rec, t);
+      db.repairs.push(rec);
       save();
       await closeSheet();
-      toast(`청구를 기록했어요 · 매출 ${won(retail - cost)}`);
+      toast(`청구를 기록했어요${t.lines.length > 1 ? ` (${t.lines.length}개 항목)` : ''} · 매출 ${won(t.amount - t.wholesale)}`);
       refresh();
     });
   });
@@ -1546,6 +1537,7 @@ function billCard(r, focusId) {
   const paid = !!r.paid;
   const cost = r.wholesale || 0;
   const from = r.complaintId ? '민원 처리' : r.noteId ? '메모 자동 등록' : '직접 청구';
+  const multi = r.lines && r.lines.length > 1;
   return `
   <article class="bill ${paid ? 'is-paid' : ''}">
     <div class="bill-top">
@@ -1555,14 +1547,17 @@ function billCard(r, focusId) {
       </div>
       <span class="cp-tag ${paid ? 'done' : ''}">${paid ? '받음' : '미수'}</span>
     </div>
-    ${r.item ? `<p class="bill-item">${esc(r.item)}</p>` : ''}
+    ${multi
+      ? `<ul class="bill-lines">${r.lines.map(l => `<li><span>${esc(l.item || '수리')}</span><small>${won(l.amount)} − ${won(l.wholesale)}</small><b>${won((l.amount || 0) - (l.wholesale || 0))}</b></li>`).join('')}</ul>`
+      : r.item ? `<p class="bill-item">${esc(r.item)}</p>` : ''}
     ${r.phone ? `<a class="cp-phone" href="${telHref(r.phone)}">📞 ${esc(r.phone)}</a>` : ''}
     <div class="bill-money"><span>소비자가격 ${won(r.amount)}</span><span>도매가 ${won(cost)}</span><b>매출 ${won((r.amount || 0) - cost)}</b></div>
+    ${multi ? '<p class="cp-note bill-multi">항목이 여러 개라 금액은 <b>수정</b>에서 고쳐요</p>' : `
     <div class="bill-amt bill-amt2">
       <label><small>소비자가격</small><input class="bill-input" inputmode="numeric" placeholder="0" value="${r.amount ? r.amount.toLocaleString('ko-KR') : ''}" data-money ${focusId === r.id ? 'data-autofocus' : ''}></label>
       <label><small>도매가</small><input class="bill-wholesale" inputmode="numeric" placeholder="0" value="${cost ? cost.toLocaleString('ko-KR') : ''}" data-money></label>
       <button class="hs-mini" data-action="bill-save" data-id="${r.id}">저장</button>
-    </div>
+    </div>`}
     <div class="cp-btns">
       <button class="hs-mini ghost" data-action="hs-toggle-paid" data-id="${r.id}">${paid ? '받음 취소' : '받음 표시'}</button>
       <button class="hs-mini ghost" data-action="bill-edit" data-id="${r.id}">수정</button>
@@ -1600,35 +1595,26 @@ function billForm(r) {
       <label class="f">호수<input name="unit" value="${esc(r.unit)}"></label>
       <label class="f">전화번호<input name="phone" type="tel" inputmode="tel" value="${esc(r.phone)}"></label>
     </div>
-    <p class="f-label">수리내용</p>
-    <div class="chips quick hs-presets">${REPAIR_PRESETS.map(p => `<button type="button" class="chip-btn" data-action="hs-item-preset" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
-    <label class="f"><textarea name="item" rows="2">${esc(r.item)}</textarea></label>
-    <div class="f-row">
-      <label class="f">소비자가격 (원)<input name="amount" inputmode="numeric" value="${r.amount ? r.amount.toLocaleString('ko-KR') : ''}" data-money></label>
-      <label class="f">도매가 (원)<input name="wholesale" inputmode="numeric" value="${r.wholesale ? r.wholesale.toLocaleString('ko-KR') : ''}" data-money></label>
-    </div>
-    <p class="sale-preview">매출 = 소비자가격 − 도매가 → <b data-margin>0원</b></p>
+    ${repLinesEditor(repLinesOf(r))}
     <label class="f">날짜<input type="date" name="date" value="${r.date || today()}"></label>
     <label class="f">메모<input name="memo" value="${esc(r.memo)}"></label>
     <button class="btn dark big" type="submit">저장하기</button>
   </form>`, sheet => {
     const form = $('#bill-form', sheet);
-    const upd = () => { $('[data-margin]', sheet).textContent = won(toNum(form.amount.value) - toNum(form.wholesale.value)); };
-    form.amount.addEventListener('input', upd);
-    form.wholesale.addEventListener('input', upd);
-    upd();
+    repBind(form);
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const f = new FormData(form);
-      const retail = toNum(f.get('amount')), cost = toNum(f.get('wholesale'));
-      if (cost > retail) { toast('도매가가 소비자가격보다 높아요. 다시 확인해 주세요'); form.wholesale.focus(); return; }
+      const t = repRead(form);
+      if (!t) return;
       Object.assign(r, {
         building: f.get('building').trim(), unit: f.get('unit').trim(), phone: f.get('phone').trim(),
-        item: f.get('item').trim(), amount: retail, wholesale: cost, date: f.get('date') || r.date, memo: f.get('memo').trim(),
+        date: f.get('date') || r.date, memo: f.get('memo').trim(),
       });
+      repApply(r, t);
       save();
       await closeSheet();
-      toast(`수정했어요 · 매출 ${won(retail - cost)}`);
+      toast(`수정했어요 · 매출 ${won(t.amount - t.wholesale)}`);
       refresh();
     });
   });
@@ -1645,7 +1631,116 @@ document.addEventListener('keydown', e => {
 
 /* ---------- 매출 · 청구 · 그래프 공용 ---------- */
 const CHART_COLOR = { direct: '#FFB84D', house: '#2F6E8F', house2: '#8E6CF0', cost: '#C9D6E3', ok: '#13875A', warn: '#E0612B' };
-const REPAIR_PRESETS = ['수도·누수', '싱크대', '변기', '보일러', '배관', '전기', '도배·장판', '방충망', '에어컨', '욕실', '기타 수리'];
+const REPAIR_PRESETS = [
+  '방등', '욕실등', '주방등', '센서등', '직부등', 'LED 모듈',
+  '샤워겸용수전', '코브라수전', '코브라(원홀)헤드', '샤워헤드', '샤워줄',
+  '변기커버', '변기부속', '팝업 트랩', '아이트랩', '액세서리세트',
+  '누드장', '욕실수건함', '욕실도어락', '욕실환풍기', '주방슬라이드후드',
+];
+
+// 청구 한 건에 수리내용·소비자가격·도매가 줄을 여러 개 넣을 수 있어요 (lines). 합계는 item·amount·wholesale에 저장
+const repLinesOf = r => (r.lines && r.lines.length ? r.lines : [{ item: r.item || '', amount: r.amount || 0, wholesale: r.wholesale || 0 }]);
+const moneyVal = v => (v ? Number(v).toLocaleString('ko-KR') : '');
+function repLineHtml(l = {}, i = 0) {
+  return `
+    <div class="rep-line" data-line>
+      <div class="rep-line-top">
+        <b class="rep-no">${i + 1}</b>
+        <input class="rl-item" placeholder="수리내용 (위에서 고르거나 직접 적기)" value="${esc(l.item)}">
+        <button type="button" class="rep-del" data-action="rep-line-del" aria-label="이 줄 지우기">×</button>
+      </div>
+      <div class="f-row">
+        <label class="f">소비자가격 (원)<input class="rl-amount" inputmode="numeric" placeholder="고객이 내는 금액" value="${moneyVal(l.amount)}" data-money></label>
+        <label class="f">도매가 (원)<input class="rl-whole" inputmode="numeric" placeholder="자재·원가" value="${moneyVal(l.wholesale)}" data-money></label>
+      </div>
+    </div>`;
+}
+function repLinesEditor(lines) {
+  return `
+    <p class="f-label">수리내용 · 가격 <small class="rep-hint">눌러서 고르면 빈 줄에 들어가요</small></p>
+    <div class="chips quick hs-presets">${REPAIR_PRESETS.map(p => `<button type="button" class="chip-btn" data-action="hs-item-preset" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
+    <div class="rep-lines">${lines.map(repLineHtml).join('')}</div>
+    <button type="button" class="rep-add" data-action="rep-line-add">＋ 소비자가격 추가 (아래에 한 줄 더)</button>
+    <div class="chips quick">${[30000, 50000, 80000, 100000, 150000].map(v => `<button type="button" class="chip-btn" data-action="hs-set-amount" data-v="${v}">${man(v)}</button>`).join('')}</div>
+    <p class="sale-preview">소비자가격 <b data-retail>0원</b> − 도매가 <b data-cost>0원</b><br>→ 매출 <b data-margin>0원</b></p>`;
+}
+// 지금 고르고 있는 줄 (마지막으로 누른 줄, 없으면 마지막 줄)
+function repActiveLine(form) {
+  const lines = $$('[data-line]', form);
+  return lines.includes(form._line) ? form._line : lines[lines.length - 1];
+}
+function repRenumber(form) {
+  $$('[data-line]', form).forEach((el, i) => { $('.rep-no', el).textContent = i + 1; });
+}
+function repPreview(form) {
+  const ls = $$('[data-line]', form);
+  const retail = sumBy(ls, el => toNum($('.rl-amount', el).value));
+  const cost = sumBy(ls, el => toNum($('.rl-whole', el).value));
+  $('[data-retail]', form).textContent = won(retail);
+  $('[data-cost]', form).textContent = won(cost);
+  $('[data-margin]', form).textContent = won(retail - cost);
+}
+function repBind(form) {
+  form.addEventListener('focusin', e => { const l = e.target.closest('[data-line]'); if (l) form._line = l; });
+  form.addEventListener('input', () => repPreview(form));
+  repPreview(form);
+}
+// 줄 읽기 → 합계. 도매가가 더 높은 줄이 있으면 null
+function repRead(form) {
+  const lines = [];
+  for (const el of $$('[data-line]', form)) {
+    const l = { item: $('.rl-item', el).value.trim(), amount: toNum($('.rl-amount', el).value), wholesale: toNum($('.rl-whole', el).value) };
+    if (!l.item && !l.amount && !l.wholesale) continue;
+    if (l.wholesale > l.amount) { toast(`${l.item || '이 줄'}: 도매가가 소비자가격보다 높아요`); $('.rl-whole', el).focus(); return null; }
+    lines.push(l);
+  }
+  return {
+    lines,
+    item: lines.map(l => l.item).filter(Boolean).join(', '),
+    amount: sumBy(lines, l => l.amount),
+    wholesale: sumBy(lines, l => l.wholesale),
+  };
+}
+// 여러 줄일 때만 lines를 남겨요 (한 줄이면 예전과 같은 모양)
+function repApply(r, t) {
+  Object.assign(r, { item: t.item, amount: t.amount, wholesale: t.wholesale });
+  if (t.lines.length > 1) r.lines = t.lines;
+  else delete r.lines;
+}
+
+// 전화번호 자동 하이픈: 01012345678 → 010-1234-5678, 0212345678 → 02-1234-5678
+function fmtPhone(v) {
+  const d = String(v || '').replace(/\D/g, '').slice(0, 11);
+  const cut = (...n) => { const out = []; let i = 0; for (const k of n) { if (i >= d.length) break; out.push(d.slice(i, k ? i + k : undefined)); i += k || d.length; } return out.join('-'); };
+  if (d.startsWith('02')) return d.length <= 9 ? cut(2, 3, 0) : cut(2, 4, 0);
+  if (/^1[5-9]/.test(d) && d.length <= 8) return cut(4, 0);
+  if (d.startsWith('010')) return cut(3, 4, 0);
+  return d.length <= 10 ? cut(3, 3, 0) : cut(3, 4, 0);
+}
+function phoneInput(el) {
+  const caret = el.selectionStart ?? el.value.length;
+  const digitsBefore = el.value.slice(0, caret).replace(/\D/g, '').length;
+  const next = fmtPhone(el.value);
+  if (next === el.value) return;
+  el.value = next;
+  let pos = 0, seen = 0;
+  while (pos < next.length && seen < digitsBefore) { if (/\d/.test(next[pos])) seen++; pos++; }
+  el.setSelectionRange(pos, pos);
+}
+// 호수 자동 '호': 301 → 301호, 101동 1203 → 101동 1203호 (지울 때는 건드리지 않아요)
+function unitInput(el, e = {}) {
+  if (e.isComposing) return;
+  const v = el.value;
+  if (e.inputType && e.inputType.startsWith('delete')) { if (!v.endsWith('호')) delete el.dataset.ho; return; }
+  const core = el.dataset.ho && v.endsWith('호') ? v.slice(0, -1) : v;
+  const caret = Math.min(el.selectionStart ?? core.length, core.length);
+  const auto = /\d$/.test(core) && !core.includes('호');
+  const next = auto ? core + '호' : core;
+  if (auto) el.dataset.ho = '1'; else delete el.dataset.ho;
+  if (next === v) return;
+  el.value = next;
+  el.setSelectionRange(caret, caret);
+}
 // 문장 속 전화번호 찾기 (010-1234-5678, 02-333-4444 등)
 const findPhone = s => (String(s || '').match(/0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}/) || [''])[0].replace(/\s/g, '');
 const sumBy = (arr, f) => arr.reduce((a, x) => a + (f(x) || 0), 0);
@@ -1668,6 +1763,8 @@ function salesRows(m) {
       kind: 'housing', src: 'housing', id: r.id, date: r.date || '',
       bld: r.building || '', place: placeOf(r) || '장소 미정', what: r.item || '수리',
       retail: r.amount || 0, wholesale: cost, sales: (r.amount || 0) - cost, paid: !!r.paid, pay: '',
+      // 수리내용별 그래프용: 줄마다 따로
+      parts: repLinesOf(r).map(l => ({ what: l.item || '수리', sales: (l.amount || 0) - (l.wholesale || 0) })),
     });
   }
   return rows.sort((a, b) => b.date.localeCompare(a.date));
@@ -1678,7 +1775,12 @@ function autoBillFromNote(n) {
   const amt = parsePrice(n.text);
   if (!amt) return null;
   const linked = n.repairId && db.repairs.find(x => x.id === n.repairId);
-  if (linked) { linked.amount = amt; if (!linked.item) linked.item = n.text; return linked; }
+  if (linked) {
+    // 청구 수정에서 항목을 여러 줄로 나눴으면 그대로 둬요
+    if (!(linked.lines && linked.lines.length > 1)) linked.amount = amt;
+    if (!linked.item) linked.item = n.text;
+    return linked;
+  }
   const rec = {
     id: uid(), building: n.building || '', unit: n.unit || '', phone: '', item: n.text,
     amount: amt, wholesale: 0, date: n.date || today(), memo: '메모에서 자동 등록',
@@ -1898,9 +2000,25 @@ const actions = {
   'hs-sms': () => openHousingSms(),
   'hs-open'(el) { closeSheet().then(() => go(el.dataset.go)); },
   'hs-set-amount'(el) {
-    const f = el.closest('form');
-    f.amount.value = (+el.dataset.v).toLocaleString('ko-KR');
-    f.amount.dispatchEvent(new Event('input', { bubbles: true }));
+    const input = $('.rl-amount', repActiveLine(el.closest('form')));
+    input.value = (+el.dataset.v).toLocaleString('ko-KR');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  },
+  'rep-line-add'(el) {
+    const form = el.closest('form');
+    const box = $('.rep-lines', form);
+    box.insertAdjacentHTML('beforeend', repLineHtml({}, $$('[data-line]', form).length));
+    form._line = box.lastElementChild;
+    form._line.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    $('.rl-amount', form._line).focus();
+  },
+  'rep-line-del'(el) {
+    const form = el.closest('form');
+    const line = el.closest('[data-line]');
+    if ($$('[data-line]', form).length > 1) line.remove();
+    else $$('input', line).forEach(i => { i.value = ''; });
+    repRenumber(form);
+    repPreview(form);
   },
   'hs-tpl'(el) {
     const form = el.closest('form');
@@ -2020,10 +2138,20 @@ const actions = {
     refresh();
     toast('메모를 삭제했어요');
   },
+  // 수리내용 버튼: 지금 줄이 비어 있으면 거기에, 아니면 빈 줄에, 빈 줄이 없으면 아래에 새 줄을 만들어 넣어요
   'hs-item-preset'(el) {
-    const f = el.closest('form');
-    f.item.value = el.dataset.v;
-    f.item.focus();
+    const form = el.closest('form');
+    const lines = $$('[data-line]', form);
+    const empty = l => !$('.rl-item', l).value.trim();
+    let line = [repActiveLine(form), ...lines].find(l => l && empty(l));
+    if (!line) {
+      $('.rep-lines', form).insertAdjacentHTML('beforeend', repLineHtml({}, lines.length));
+      line = $('.rep-lines', form).lastElementChild;
+    }
+    $('.rl-item', line).value = el.dataset.v;
+    form._line = line;
+    line.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    repPreview(form);
   },
   'sales-open'(el) {
     if (el.dataset.kind === 'clean') go('job/' + el.dataset.id);
@@ -2203,10 +2331,19 @@ document.addEventListener('input', e => {
   if (el.matches('[data-money]')) {
     const n = toNum(el.value);
     el.value = n ? n.toLocaleString('ko-KR') : '';
+  } else if (el.matches('input[type=tel]')) {
+    phoneInput(el);
+  } else if (el.matches('input[name=unit]')) {
+    unitInput(el, e);
   } else if (el.matches('[data-cust-search]')) {
     ui.custQuery = el.value;
     $('#cust-list').innerHTML = custList();
   }
+});
+
+// 한글 자판으로 '동'을 칠 때 (조합이 끝난 뒤에 '호'를 맞춰요)
+document.addEventListener('compositionend', e => {
+  if (e.target.matches && e.target.matches('input[name=unit]')) unitInput(e.target);
 });
 
 window.addEventListener('hashchange', () => { navCount++; render(); });
