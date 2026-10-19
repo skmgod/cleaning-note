@@ -31,12 +31,11 @@ j = await tool(3, 'add_reservation', { building: '래미안 아파트', unit: '1
 assert.ok(!j.result.isError, j.result.content[0].text);
 assert.match(j.result.content[0].text, /예약을 보관함에 넣었어요/);
 
-// 4) 잘못된 날짜, 전화번호 없는 예약은 거절
+// 4) 잘못된 날짜는 거절, 전화번호는 없어도 됨
 j = await tool(4, 'add_reservation', { date: '내일', time: '14:00', phone: '010-1234-5678' });
 assert.equal(j.result.isError, true);
 j = await tool(41, 'add_reservation', { date: '2026-10-20', time: '14:00' });
-assert.equal(j.result.isError, true);
-assert.match(j.result.content[0].text, /전화번호/);
+assert.ok(!j.result.isError, j.result.content[0].text);
 
 // 5) 민원 접수
 j = await tool(5, 'add_complaint', { building: '래미안 아파트', unit: '101동 1203호', phone: '010-1234-5678', content: '화장실 변기 물이 안 내려감' });
@@ -57,19 +56,19 @@ assert.ok(!j.result.isError, j.result.content[0].text);
 
 // 9) 보관함에 네 종류가 모두 들어가고, 종류(kind)·금액·날짜가 맞는지 확인
 let inbox = await (await call('/inbox/test-secret-123', { method: 'GET' })).json();
-assert.deepEqual(inbox.items.map(x => x.kind).sort(), ['charge', 'complaint', 'note', 'reservation']);
+assert.deepEqual(inbox.items.map(x => x.kind).sort(), ['charge', 'complaint', 'note', 'reservation', 'reservation']);
 const charge = inbox.items.find(x => x.kind === 'charge');
 assert.equal(charge.amount, 80000);
 assert.equal(charge.wholesale, 30000);
 assert.match(charge.date, /^\d{4}-\d{2}-\d{2}$/);
-const reservation = inbox.items.find(x => x.kind === 'reservation');
+const reservation = inbox.items.find(x => x.kind === 'reservation' && x.phone);
 assert.equal(reservation.price, 150000);
 assert.equal(reservation.phone, '010-1234-5678');
 assert.equal(reservation.source, 'housing');
 
 // 10) 목록 보기 도구
 j = await tool(10, 'list_pending', {});
-assert.match(j.result.content[0].text, /4건/);
+assert.match(j.result.content[0].text, /5건/);
 
 // 11) 휴대폰이 가져간 뒤 확인(ack) → 보관함 비워짐
 await call('/inbox/test-secret-123/ack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: inbox.items.map(x => x.id) }) });

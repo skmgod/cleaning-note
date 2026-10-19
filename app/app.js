@@ -844,7 +844,7 @@ function openJobForm(job = null, preset = {}) {
   <form class="form" id="job-form" autocomplete="off">
     <h2>${isNew ? '청소 예약 등록' : '예약 수정'}</h2>
     ${isNew ? AI_PASTE_HTML : ''}
-    <label class="f">고객 전화번호 <small class="req">필수</small>
+    <label class="f">고객 전화번호 <small class="opt">(선택)</small>
       <input name="phone" type="tel" inputmode="tel" placeholder="010-0000-0000" value="${esc(j.phone)}">
     </label>
     <p class="f-label">매출 출처</p>
@@ -882,7 +882,6 @@ function openJobForm(job = null, preset = {}) {
       const f = new FormData(form);
       if ($('.type-chips', form).classList.contains('editing')) { toast('청소 종류 편집을 먼저 완료해 주세요'); return; }
       const phone = f.get('phone').trim();
-      if (phone.replace(/\D/g, '').length < 9) { toast('고객 전화번호를 입력해 주세요'); form.phone.focus(); return; }
       const base = {
         customerId: j.customerId || '', type: f.get('type') || $('.type-chips', form).dataset.sel || '기타',
         date: f.get('date'), time: f.get('time'), price: toNum(f.get('price')), memo: f.get('memo').trim(),
