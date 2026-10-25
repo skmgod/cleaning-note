@@ -775,7 +775,7 @@ function settings() {
   <section class="card">
     <button class="set-item danger" data-action="reset"><span class="emo">🗑️</span><span>모든 데이터 삭제</span></button>
   </section>
-  <p style="text-align:center;color:var(--muted);font-size:12px;font-weight:600;margin:20px 0">반짝 청소노트 v1.0</p>`;
+  <p style="text-align:center;color:var(--muted);font-size:12px;font-weight:600;margin:20px 0">반짝 청소노트 v1.0 · <a href="privacy.html" style="color:inherit">개인정보처리방침</a></p>`;
 }
 
 function notFound() {
